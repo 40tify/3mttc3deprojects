@@ -9,6 +9,7 @@ The primary goal of this system is to address operational challenges surrounding
 ## 📄 Project Documentation
 
 * **Project Plan:** The complete technical specification, schemas, and SQL transformations are detailed in the [AgencyBanking_ProjectPLan.md](./AgencyBanking_ProjectPLan.md) file.
+* **Orchestration DAG:** The data generation, simulation, and GCS upload workflow is defined in the [agency_banking_data_generator_dag.py](./dags/agency_banking_data_generator_dag.py) file.
 
 ---
 

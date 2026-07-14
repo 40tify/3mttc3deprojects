@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Local/temporary files
+tmp/
+
+# Data files
+*.csv
+
+# Log files
+*.log
+logs/
+
+# GCP credentials (ignore actual keys, keep template)
+credentials/*
+!credentials/gcp-sa-key.json.template
+
+#Others
+walkthrough.md
+implementation_plan.md
+implementation_plan2.md
