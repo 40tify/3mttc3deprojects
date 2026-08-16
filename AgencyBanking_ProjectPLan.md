@@ -1,130 +1,168 @@
-## **Agency Banking & Mobile Money Transaction Reconciliation** 
+# Agency Banking & Mobile Money Lakehouse Data Pipeline - Project Plan
 
-## **1. Business Problem Statement**
+> [!IMPORTANT]
+> **Project Goal**: Build a governed, end-to-end Lakehouse pipeline using Apache Airflow, Google Cloud Storage (GCS), BigQuery, Apache Iceberg, and OpenMetadata based on [`Project-Guide.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docs/Project-Guide.md).
 
-This project simulates an agency banking and mobile money platform that coordinates a nationwide network of independent POS agents processing financial transactions for underbanked populations. The fintech organization operating this network faces challenges with daily liquidity tracking, agent commission settlement accuracy, and spotting high-risk or failing nodes in the network. The resulting fact table and business views will support nightly operational decisions regarding regional cash liquidity allocation, the identification of underperforming or dormant agents, and the adjustment of commission tiers to incentivize volume while maintaining healthy margins.
+---
 
-## **2. Dimension Table Schemas**
+## 1. Project Overview & Architecture
 
-### **Table Name: `dim_agents`**
+### Business Problem Statement
+This project simulates an agency banking and mobile money platform coordinating a nationwide network of POS agents processing financial transactions for underbanked populations. The fintech organization faces challenges with daily liquidity tracking, agent commission settlement accuracy, network performance monitoring, and compliance auditing.
 
-* **Columns:** `agent_id` (INT, PK), `agent_name` (STRING), `business_name` (STRING), `terminal_id` (STRING), `tier_level` (STRING), `signup_date` (DATE)  
-* **Comment:** Holds the identity, hardware terminal mapping, and performance tier of each active banking agent. Used in the fact table to attribute every transaction to a specific agent and evaluate network performance.
+The Lakehouse pipeline ingests raw transactional flat files, performs ELT transformations in BigQuery, exposes serving data marts to business intelligence tools, logs execution audits, offloads aged data to open-format Apache Iceberg tables, and maintains end-to-end governance via OpenMetadata.
 
-### **Table Name: `dim_customers`**
+### End-to-End Lakehouse Architecture
 
-* **Columns:** `customer_id` (INT, PK), `customer_phone` (STRING), `kyc_status` (STRING), `account_type` (STRING), `registration_date` (DATE)  
-* **Comment:** Tracks customer account details and regulatory compliance (KYC) status. Used to analyze transaction patterns across different customer demographics and flag unverified account limits.
+```mermaid
+flowchart TD
+    subgraph Orchestration["⚡ Airflow Orchestration Engine"]
+        DAG0["DAG 0: One-Time Dimension Loader (@once)"]
+        DAG1["DAG 1: Landing Data Generator (@daily)"]
+        DAG2["DAG 2: Core ELT Pipeline (@daily)"]
+        DAG3["DAG 3: Iceberg Archival (@monthly)"]
+    end
 
-### **Table Name: `dim_transaction_types`**
+    subgraph GCS["☁️ GCS Lakehouse Storage"]
+        GCS_TMP["📁 temp/<br><code>dim_*.csv</code>"]
+        GCS_LND["📁 landing/<br><code>lnd_YYYYMMDD_1..3.csv</code>"]
+        GCS_ARC["📁 archival/<br><code>Processed CSV files</code>"]
+        GCS_ICE["📁 iceberg/<br><code>Iceberg Parquet + Metadata</code>"]
+    end
 
-* **Columns:** `txn_type_id` (INT, PK), `txn_name` (STRING), `direction` (STRING), `is_financial` (BOOLEAN)  
-* **Comment:** Categorizes the exact nature of the transaction (e.g., Cash-In/Deposit, Cash-Out/Withdrawal, Bill Payment, Airtime Purchase) and its impact on cash flow direction.
+    subgraph BQ["🏢 BigQuery Data Warehouse Layer"]
+        BQ_DIM["🗂️ john_dw_core_dataset.dim_*<br><i>(Dimensions)</i>"]
+        BQ_LND["📥 john_lnd_stg_dataset.lnd_*<br><i>(Raw Landing, 7-Day TTL)</i>"]
+        BQ_STG["⚙️ john_lnd_stg_dataset.stg_*<br><i>(Enriched Staging, 7-Day TTL)</i>"]
+        BQ_FACT["📊 john_dw_core_dataset.fact_*<br><i>(Partitioned & Clustered Fact)</i>"]
+        BQ_VIEWS["📈 john_dw_analytics_dataset.vw_*<br><i>(Serving Views)</i>"]
+        BQ_LOG["📜 john_dw_core_dataset.pipeline_execution_logs<br><i>(Audit Logs)</i>"]
+    end
 
-### **Table Name: `dim_geography`**
+    subgraph ARCH["❄️ Iceberg Archival Layer"]
+        ICE_REST["Lakekeeper REST Catalog"]
+        ICE_TAB["Iceberg Archival Tables"]
+    end
 
-* **Columns:** `geo_id` (INT, PK), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING)  
-* **Comment:** Maps out the geographic location of the agent terminals. Essential for identifying regional liquidity demands, processing bottlenecks, and underserved financial zones.
+    subgraph GOV["🛡️ Data Governance"]
+        OMD["OpenMetadata Hub<br><i>(Lineage • Data Dictionary • DQ Suites)</i>"]
+    end
 
-## **3. Landing Table Schema**
+    DAG0 -->|Generate & Upload| GCS_TMP
+    GCS_TMP -->|One-Time Load| BQ_DIM
 
-The landing table acts as a temporary, raw storage layer. The column names and data types mirror the exact format of the incoming daily flat file generated by the agent terminal gateways.
+    DAG1 -->|Daily 3 CSV Files| GCS_LND
 
-* **Landing Table Pattern:** `lnd_agency.lnd_20260706`  
-* **Columns:** `txnid` (STRING), `createdat` (TIMESTAMP), `terminalid` (STRING), `custphone` (STRING), `txntypecode` (INT), `amount` (FLOAT), `fee_charged` (FLOAT), `status` (STRING)  
-* **Sample Row:** "TXN-908112", "2026-07-06 14:22:01", "TERM-7701", "2348030000000", 102, 5000.00, 100.00, "SUCCESS"
+    GCS_LND -->|1. Load Flat Files| BQ_LND
+    DAG2 -->|Orchestrates ELT| BQ_LND
+    BQ_LND -->|2. SQL Transform & Enrich| BQ_STG
+    BQ_DIM -.->|Join Lookups| BQ_STG
+    BQ_STG -->|3. Merge & Upsert| BQ_FACT
+    BQ_FACT -->|4. Refresh BI Views| BQ_VIEWS
+    BQ_FACT & BQ_STG & BQ_LND -->|5. Write Audit Events| BQ_LOG
+    DAG2 -->|6. Move Processed CSVs| GCS_ARC
 
-## **4. Staging Table Schema**
+    DAG3 -->|7. Query Aged Rows| BQ_FACT
+    DAG3 -->|8. Export & Write| ICE_REST
+    ICE_REST -->|Write Parquet| GCS_ICE
+    ICE_REST -->|Metadata| ICE_TAB
 
-The staging layer is where data cleaning, business logic application, and dimension lookups happen. Here, we map raw terminal IDs to geographical regions and calculate the agent's net commission payout.
-
-### **Table Details**
-
-* **Table Name Pattern:** `stg_agency.stg_20260706`  
-* **Columns:** `transaction_id` (STRING), `transaction_timestamp` (TIMESTAMP), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `state` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (FLOAT), `fee_charged` (FLOAT), `agent_commission` (FLOAT)
-
-**Landing to Staging Transformation (SQL)** 
-```sql
-SELECT   
-    l.txnid AS transaction_id,  
-    l.createdat AS transaction_timestamp,  
-    a.agent_name,  
-    l.terminalid AS terminal_id,  
-    g.location_cluster,  
-    g.state,  
-    l.custphone AS customer_phone,  
-    COALESCE(c.kyc_status, 'UNREGISTERED') AS kyc_status,  
-    t.txn_name AS transaction_name,  
-    t.direction,  
-    l.amount AS transaction_amount,  
-    l.fee_charged,  
-    -- Business logic: Agents earn 70% of the flat fee charged for transactions  
-    (l.fee_charged * 0.70) AS agent_commission  
-FROM lnd_agency.lnd_20260706 l  
-LEFT JOIN dim_agency.dim_agents a ON l.terminalid = a.terminal_id  
-LEFT JOIN dim_agency.dim_geography g ON a.geo_id = g.geo_id  
-LEFT JOIN dim_agency.dim_customers c ON l.custphone = c.customer_phone  
-LEFT JOIN dim_agency.dim_transaction_types t ON l.txntypecode = t.txn_type_id  
-WHERE l.status = 'SUCCESS'; -- Filter out failed transactions early
+    BQ & ICE_TAB & Airflow -->|Ingest Metadata & Lineage| OMD
 ```
-### **Comment**
 
-Enriches raw transaction events by joining active agent records (`dim_agents`), locations (`dim_geography`), customers (`dim_customers`), and transaction rules (`dim_transaction_types`). It filters out failed delivery attempts and derives a net `agent_commission` metric so that downstream business logic has pre-calculated financial data ready for aggregation.
+---
 
-## **5. Fact Table Schema**
+## 2. Configuration Parameters
 
-* **Table Name:** `fact_agency.fact_daily_transactions`  
-* **Grain:** One row per successful financial transaction executed at an agent terminal.  
-* **Columns:** `transaction_id` (STRING), `transaction_timestamp` (TIMESTAMP), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `state` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (FLOAT), `fee_charged` (FLOAT), `agent_commission` (FLOAT)
+| Parameter | Value | Description |
+| :--- | :--- | :--- |
+| **GCP Project ID** | `your-gcp-project-id` | Target Google Cloud Project |
+| **GCS Bucket** | `gs://3mtt-lakehouse-agencybanking/` | Primary Lakehouse Storage Bucket |
+| **BigQuery Dataset (Landing/Staging)**| `john_lnd_stg_dataset` (7-day TTL) | Temporary ingestion & staging dataset |
+| **BigQuery Dataset (Core Fact/Dims)**| `john_dw_core_dataset` | Permanent warehouse storage |
+| **BigQuery Dataset (Serving Views)** | `john_dw_analytics_dataset` | Business intelligence layer views |
+| **Audit Log Table** | `john_dw_core_dataset.pipeline_execution_logs` | Central execution tracking log |
+| **Iceberg Catalog** | Lakekeeper REST Catalog | Archival catalog manager |
+| **Governance Platform** | OpenMetadata Instance | Lineage, data dictionary & DQ monitor |
 
-**Staging to Fact Load (SQL)** 
-```sql
-INSERT INTO fact_agency.fact_daily_transactions (  
-    transaction_id,  
-    transaction_timestamp,  
-    agent_name,  
-    terminal_id,  
-    location_cluster,  
-    state,  
-    customer_phone,  
-    kyc_status,  
-    transaction_name,  
-    direction,  
-    transaction_amount,  
-    fee_charged,  
-    agent_commission  
-)  
-SELECT   
-    transaction_id,  
-    transaction_timestamp,  
-    agent_name,  
-    terminal_id,  
-    location_cluster,  
-    state,  
-    customer_phone,  
-    kyc_status,  
-    transaction_name,  
-    direction,  
-    transaction_amount,  
-    fee_charged,  
-    agent_commission  
-FROM stg_agency.stg_20260706;
-```
-### **Comment**
+---
 
-This fact table is built to answer key operational business questions, including:
+## 3. Data Model & Schemas
 
-* *"Which agent terminals are driving the highest transaction volumes and fee revenue?"*  
-* *"What is the daily total liquidity payout requirement by state or location cluster?"*  
-* *"What are the total daily commissions earned by agents across different performance tiers?"*
+### Dimension Tables (`john_dw_core_dataset`)
 
-## **6. Log Table Schema**
+1. **`dim_agents`**:
+   - `agent_id` (INT64, PK), `agent_name` (STRING), `business_name` (STRING), `terminal_id` (STRING), `tier_level` (STRING), `signup_date` (DATE)
+2. **`dim_customers`**:
+   - `customer_id` (INT64, PK), `customer_phone` (STRING), `kyc_status` (STRING), `account_type` (STRING), `registration_date` (DATE)
+3. **`dim_transaction_types`**:
+   - `txn_type_id` (INT64, PK), `txn_name` (STRING), `direction` (STRING), `is_financial` (BOOLEAN)
+4. **`dim_geography`**:
+   - `geo_id` (INT64, PK), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING)
 
-* **Table Name:** `log_db.log_tb`  
-* **Columns:** `lnd_starttime` (TIMESTAMP), `lnd_endtime` (TIMESTAMP), `stg_starttime` (TIMESTAMP), `stg_endtime` (TIMESTAMP), `fact_starttime` (TIMESTAMP), `fact_endtime` (TIMESTAMP), `lnd_tablename` (STRING), `stg_tablename` (STRING), `fact_tablename` (STRING), `load_status` (STRING)  
-* **Comment:** Tracks execution metadata for each individual daily batch run cycle. When the pipeline starts, an initial record logs `lnd_tablename` and `lnd_starttime`. Each downstream Airflow task updates the timestamps as it wraps up, concluding with a final update setting `load_status` = 'success' or 'failed'
+### Landing Table (`john_lnd_stg_dataset.lnd_daily_transactions`)
+- Raw ingestion table populated directly from GCS flat files (`lnd_YYYYMMDD_1..3.csv`).
+- Schema: `txnid` (STRING), `createdat` (STRING), `terminalid` (STRING), `custphone` (STRING), `txntypecode` (INT64), `amount` (NUMERIC), `fee_charged` (NUMERIC), `status` (STRING)
 
-## **Architecture Design Choice & Confirmation**
+### Staging Table (`john_lnd_stg_dataset.stg_daily_transactions`)
+- Created via `CREATE OR REPLACE TABLE` in SQL during DAG 2 ELT execution.
+- Performs dimension lookups, string parsing, timestamp conversion, and calculates `agent_commission` (`fee_charged * 0.70`).
 
-* **Design Chosen:** **Star Schema**  
-* **Justification:** A Star Schema is ideal for this batch-processing pipeline. Denormalizing location details directly into `dim_geography` and agent information into `dim_agents` eliminates complex multi-stage joins during analytical queries. This architecture significantly accelerates reporting performance on downstream business views, ensuring risk officers and operations managers can run intensive queries on transaction volumes, commissions, and liquidity distributions without performance bottlenecks.
+### Partitioned Fact Table (`john_dw_core_dataset.fact_daily_transactions`)
+- Partitioned by `DATE(transaction_timestamp)` and clustered by `agent_id`, `state`.
+- Schema: `transaction_id` (STRING), `transaction_timestamp` (TIMESTAMP), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `agent_commission` (NUMERIC)
+
+### Serving Views (`john_dw_analytics_dataset`)
+1. **`vw_agent_performance`**: Summarizes total transactions, transaction volume, gross fees, and agent commission earnings by agent tier and cluster.
+2. **`vw_daily_liquidity_summary`**: Analyzes cash deposit (`IN`) vs cash withdrawal (`OUT`) volumes by LGA/state for daily cash rebalancing.
+3. **`vw_kyc_compliance_risk`**: Flags high-value transactions conducted by `UNREGISTERED` or `PENDING` KYC accounts.
+
+---
+
+## 4. Pipeline Execution Workflow
+
+### DAG 0: One-Time Dimension Loader (`@once`)
+- Generates static/seed dimension CSVs (`dim_agents`, `dim_customers`, `dim_transaction_types`, `dim_geography`).
+- Uploads CSVs to `gs://.../temp/`.
+- Executes one-time load into BigQuery `john_dw_core_dataset.dim_*` tables.
+
+### DAG 1: Daily Landing Data Generator (`@daily`)
+- Simulates daily POS operational logs.
+- Outputs exactly 3 deterministic CSV files per daily logical date: `landing/lnd_YYYYMMDD_1.csv`, `landing/lnd_YYYYMMDD_2.csv`, `landing/lnd_YYYYMMDD_3.csv`.
+- Guarantees idempotency (re-running overwrites exact 3 files).
+
+### DAG 2: Core ELT Pipeline (`@daily`)
+- **Step 1: Direct Load**: Reads GCS `landing/` CSVs for `logical_date` into BigQuery `john_lnd_stg_dataset.lnd_daily_transactions`.
+- **Step 2: SQL Staging Transform**: Runs `CREATE OR REPLACE TABLE stg_daily_transactions` joining raw landing records with dimension tables, cleaning data, and deriving `agent_commission`.
+- **Step 3: Fact Upsert/Merge**: Runs SQL `MERGE` into partitioned `john_dw_core_dataset.fact_daily_transactions`.
+- **Step 4: Audit Metrics Logging**: Appends task execution row to `john_dw_core_dataset.pipeline_execution_logs`.
+- **Step 5: Refresh Serving Views**: Refreshes views in `john_dw_analytics_dataset`.
+- **Step 6: File Hygiene & Archival**: Moves ingested flat files from `landing/` to `archival/` in GCS.
+
+### DAG 3: Iceberg Archival Pipeline (`@monthly`)
+- Queries fact table records older than retention period ($N$ months).
+- Overwrites target monthly Apache Iceberg partitions in GCS `iceberg/` via Lakekeeper REST Catalog.
+
+---
+
+## 5. Audit Logging Specification
+
+Every pipeline execution task appends audit events to `john_dw_core_dataset.pipeline_execution_logs`:
+
+| Column Name | Data Type | Description |
+| :--- | :--- | :--- |
+| `run_id` | `STRING` | Airflow DAG run execution ID |
+| `logical_date` | `DATE` | Pipeline logical date timestamp |
+| `task_id` | `STRING` | Name of the executed Airflow task |
+| `target_table` | `STRING` | Target dataset/table updated |
+| `rows_processed` | `INT64` | Number of inserted / modified rows |
+| `execution_status` | `STRING` | `SUCCESS` \| `FAILED` \| `RETRY` |
+| `created_at` | `TIMESTAMP` | Logging event timestamp |
+
+---
+
+## 6. Data Governance with OpenMetadata
+
+- **Visual Lineage**: GCS Flat Files -> Airflow DAG Tasks -> BQ Landing/Staging/Fact -> Serving Views & Iceberg Archives.
+- **Unified Catalog**: Tagged schemas, column descriptions, and metadata across BigQuery and Iceberg open formats.
+- **Data Quality Suites**: Automated DQ tests checking null constraints, primary key uniqueness, and value range assertions.

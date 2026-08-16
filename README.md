@@ -1,66 +1,110 @@
-# Agency Banking & Mobile Money Transaction Reconciliation
+# Agency Banking & Mobile Money Lakehouse Data Pipeline
 
-Welcome to the **Agency Banking & Mobile Money Transaction Reconciliation** project. This project simulates an agency banking and mobile money platform designed to coordinate a nationwide network of independent POS agents processing financial transactions for underbanked populations.
+Welcome to the **Agency Banking & Mobile Money Lakehouse Data Pipeline** project. This project simulates an agency banking and mobile money platform designed to coordinate a nationwide network of independent POS agents processing financial transactions for underbanked populations.
 
-The primary goal of this system is to address operational challenges surrounding daily liquidity tracking, agent commission settlement accuracy, and early identification of high-risk or underperforming nodes within the network.
+The primary goal of this system is to address operational challenges surrounding daily liquidity tracking, agent commission settlement accuracy, network performance monitoring, and governance compliance auditing.
 
 ---
 
 ## 📄 Project Documentation
 
-* **Project Plan:** The complete technical specification, schemas, and SQL transformations are detailed in the [AgencyBanking_ProjectPLan.md](./AgencyBanking_ProjectPLan.md) file.
-* **Orchestration DAG:** The data generation, simulation, and GCS upload workflow is defined in the [agency_banking_data_generator_dag.py](./dags/agency_banking_data_generator_dag.py) file.
+* **Project Plan:** The complete technical specification, schemas, and SQL transformations are detailed in the [`AgencyBanking_ProjectPLan.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/AgencyBanking_ProjectPLan.md) file.
+* **Project Guide:** The step-by-step setup, requirements checklist, and overview guide can be found in the [`Project-Guide.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docs/Project-Guide.md) file.
 
 ---
 
 ## 🏗️ Architecture Overview
 
-The system is implemented using a **Star Schema** database architecture. This design decision denormalizes geographical and agent details to minimize complex multi-stage joins, ensuring fast execution of analytical queries for daily liquidity allocation and agent commission calculations.
-
-### Data Flow Pipeline
-The pipeline flows through three logical layers:
+The system is implemented using a **Lakehouse Architecture** combining local GCS flat file ingestion, BigQuery ELT transformations using SQL, Serving Data Marts, and Apache Iceberg archival, orchestrated by Apache Airflow.
 
 ```mermaid
-graph LR
-    LND[(Landing Layer)] -->|Transformation & Enrichment| STG[(Staging Layer)]
-    STG -->|Load Fact Table| FACT[(Fact Table)]
-    
-    subgraph Dimension Lookups
-        dim_agents[dim_agents]
-        dim_customers[dim_customers]
-        dim_transaction_types[dim_transaction_types]
-        dim_geography[dim_geography]
+graph TD
+    subgraph Orchestration [⚡ Airflow Orchestration]
+        DAG0[DAG 0: Dim Loader]
+        DAG1[DAG 1: Data Generator]
+        DAG2[DAG 2: Core ELT Pipeline]
+        DAG3[DAG 3: Iceberg Archival]
     end
+
+    subgraph GCS [☁️ GCS Lakehouse Storage]
+        GCS_TMP[📁 temp/ - dim_*.csv]
+        GCS_LND[📁 landing/ - lnd_*.csv]
+        GCS_ARC[📁 archival/ - Processed CSVs]
+        GCS_ICE[📁 iceberg/ - Parquet Tables]
+    end
+
+    subgraph BigQuery [🏢 BigQuery DW Layer]
+        BQ_DIM[(john_dw_core_dataset.dim_*)]
+        BQ_LND[(john_lnd_stg_dataset.lnd_*)]
+        BQ_STG[(john_lnd_stg_dataset.stg_*)]
+        BQ_FACT[(john_dw_core_dataset.fact_*)]
+        BQ_VIEWS[(john_dw_analytics_dataset.vw_*)]
+        BQ_LOGS[(john_dw_core_dataset.pipeline_execution_logs)]
+    end
+
+    DAG0 -->|Upload dim CSVs| GCS_TMP
+    GCS_TMP -->|Load dimensions| BQ_DIM
     
-    dim_agents -.-> STG
-    dim_customers -.-> STG
-    dim_transaction_types -.-> STG
-    dim_geography -.-> STG
+    DAG1 -->|Generate 3 daily CSVs| GCS_LND
+    GCS_LND -->|Load raw CSVs| BQ_LND
+    
+    DAG2 -->|SQL Transform| BQ_STG
+    BQ_DIM -.->|Join Lookups| BQ_STG
+    BQ_STG -->|MERGE & Upsert| BQ_FACT
+    BQ_FACT -->|Refresh Views| BQ_VIEWS
+    DAG2 -->|Archival Move| GCS_ARC
+    DAG2 -->|Write Audits| BQ_LOGS
+
+    DAG3 -->|Archive aged rows| GCS_ICE
 ```
 
-1. **Landing Layer (`lnd_agency.lnd_<YYYYMMDD>`)**: Stores raw flat-file logs from agent terminals.
-2. **Staging Layer (`stg_agency.stg_<YYYYMMDD>`)**: Standardizes values, performs dimension lookups, filters successful transactions, and computes business metrics (e.g., `agent_commission` calculated as 70% of the transaction fee).
-3. **Fact Table (`fact_agency.fact_daily_transactions`)**: The final analytical grain where successful transaction events are stored, answering key operational questions.
+### Logical Data Flow Layers
+1. **Landing Layer (`john_lnd_stg_dataset.lnd_daily_transactions`)**: Raw ingestion layer loaded directly from GCS transactional logs (`landing/lnd_YYYYMMDD_1..3.csv`).
+2. **Staging Layer (`john_lnd_stg_dataset.stg_daily_transactions`)**: Cleans, casts types, performs dimension lookups, filters successful transactions, and computes business metrics (e.g. `agent_commission` calculated as 70% of the transaction fee).
+3. **Core Fact Layer (`john_dw_core_dataset.fact_daily_transactions`)**: Clean, partitioned (by transaction date), and clustered (by agent ID and state) data mart storing final successful transaction events.
+4. **Serving Views Layer (`john_dw_analytics_dataset.vw_*`)**: Analytical layer hosting semantic views for business reporting.
+
+---
+
+## 🗄️ Project Repository Map & File Links
+
+### ⚡ Airflow Orchestration DAGs
+* **DAG 0: One-Time Dimension Loader** ➔ [`dag0_dimension_loader_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/dag0_dimension_loader_dag.py)
+* **DAG 1: Daily Landing Data Generator** ➔ [`agency_banking_data_generator_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_data_generator_dag.py)
+* **DAG 2: Core ELT Pipeline** ➔ [`agency_banking_elt_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_elt_dag.py)
+* **DAG 3: Monthly Iceberg Archival Pipeline** ➔ [`agency_banking_iceberg_archival_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_iceberg_archival_dag.py)
+
+### 📊 SQL Database Scripts (BigQuery DDL & ELT Queries)
+* **Dataset & Table DDL Setup:** [`01_create_datasets_and_tables.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/01_create_datasets_and_tables.sql)
+* **Staging Transform query:** [`02_elt_transform_landing_to_staging.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/02_elt_transform_landing_to_staging.sql)
+* **Fact Merge query:** [`03_elt_merge_staging_to_fact.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/03_elt_merge_staging_to_fact.sql)
+* **Serving Views Refresh:** [`04_create_serving_views.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/04_create_serving_views.sql)
+
+### 🛡️ Data Governance & Quality Setup
+* **OpenMetadata configuration:** [`openmetadata_config.yaml`](file:///c:/Users/ICT/Documents/3mttc3deprojects/governance/openmetadata_config.yaml)
+
+### 📦 Containerization & Environment Configuration
+* **Docker Compose Orchestration:** [`docker-compose.yaml`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docker-compose.yaml)
+* **Custom Airflow Image Build:** [`Dockerfile`](file:///c:/Users/ICT/Documents/3mttc3deprojects/Dockerfile)
+* **Local Python Dependencies:** [`requirements.txt`](file:///c:/Users/ICT/Documents/3mttc3deprojects/requirements.txt)
 
 ---
 
 ## 🗄️ Database Schema Summary
 
-### Dimension Tables
-* **`dim_agents`**: Identity, terminal hardware mappings, and performance tiers.
-* **`dim_customers`**: Customer profiles, account types, and KYC status.
-* **`dim_transaction_types`**: Transaction categories (e.g., deposit, withdrawal) and direction.
+### Dimension Tables (`john_dw_core_dataset`)
+* **`dim_agents`**: POS agent names, business names, tier levels, and terminal hardware mappings.
+* **`dim_customers`**: Customer registration profiles, account types, and KYC statuses.
+* **`dim_transaction_types`**: Transaction categories (e.g. cash-in, cash-out, airtime) and direction.
 * **`dim_geography`**: Geographical mapping of terminals (regions, states, LGAs).
 
-### Core Fact Table
-* **`fact_daily_transactions`**: Detailed record of each successful transaction. Contains transaction details, location, customer KYC, and pre-calculated commissions.
-
-### Execution Logs
-* **`log_db.log_tb`**: Tracks execution start/end timestamps and final statuses for each pipeline execution batch run (e.g., for orchestration with tools like Apache Airflow).
+### Core Fact & Logs (`john_dw_core_dataset`)
+* **`fact_daily_transactions`**: Partitoned and clustered transaction logs enriched with geographical lookups and derived commissions.
+* **`pipeline_execution_logs`**: Logs step-by-step metadata (logical dates, rows processed, runtime status) across the entire pipeline.
 
 ---
 
 ## 💡 Key Business Questions Addressed
 * Which agent terminals are driving the highest transaction volumes and fee revenue?
-* What is the daily total liquidity payout requirement by state or location cluster?
+* What is the daily total liquidity payout requirement (cash-in vs cash-out) by state or location cluster?
 * What are the total daily commissions earned by agents across different performance tiers?

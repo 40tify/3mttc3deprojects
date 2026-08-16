@@ -1,0 +1,69 @@
+# =============================================================================
+# OpenMetadata Data Governance & Quality Configuration
+# =============================================================================
+
+version: "1.2"
+openmetadata:
+  hostPort: "http://openmetadata.internal:8585/api"
+  authProvider: "openmetadata"
+
+ingestion_pipelines:
+  - name: "bigquery_lakehouse_lineage"
+    type: "DatabaseService"
+    service_name: "bigquery_lakehouse"
+    config:
+      serviceType: "BigQuery"
+      source:
+        config:
+          type: "BigQuery"
+          datasetFilterPattern:
+            includes: ["john_lnd_stg_dataset", "john_dw_core_dataset", "john_dw_analytics_dataset"]
+          enableParsedDataModel: true
+          includeLineage: true
+
+  - name: "airflow_pipeline_lineage"
+    type: "PipelineService"
+    service_name: "airflow_orchestrator"
+    config:
+      serviceType: "Airflow"
+      source:
+        config:
+          type: "Airflow"
+          dagFilterPattern:
+            includes: ["dag0_dimension_loader_dag", "dag1_landing_data_generator_dag", "dag2_core_elt_pipeline_dag", "dag3_iceberg_archival_dag"]
+
+  - name: "iceberg_catalog_lineage"
+    type: "DatabaseService"
+    service_name: "lakekeeper_iceberg_catalog"
+    config:
+      serviceType: "Iceberg"
+      source:
+        config:
+          type: "Iceberg"
+          catalogUri: "http://lakekeeper.internal:8080"
+          warehouse: "gs://3mtt-lakehouse-agencybanking/iceberg"
+
+data_quality_suites:
+  - table: "john_dw_core_dataset.fact_daily_transactions"
+    tests:
+      - testName: "column_values_to_not_be_null_transaction_id"
+        columnName: "transaction_id"
+        testDefinitionName: "columnValuesToBeNotNull"
+      - testName: "column_values_to_be_unique_transaction_id"
+        columnName: "transaction_id"
+        testDefinitionName: "columnValuesToBeUnique"
+      - testName: "column_values_to_be_between_transaction_amount"
+        columnName: "transaction_amount"
+        testDefinitionName: "columnValuesToBeBetween"
+        params:
+          minValue: 0
+          maxValue: 1000000
+      - testName: "column_values_to_not_be_null_agent_commission"
+        columnName: "agent_commission"
+        testDefinitionName: "columnValuesToBeNotNull"
+
+  - table: "john_dw_core_dataset.dim_agents"
+    tests:
+      - testName: "column_values_to_be_unique_agent_id"
+        columnName: "agent_id"
+        testDefinitionName: "columnValuesToBeUnique"

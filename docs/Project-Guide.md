@@ -28,10 +28,10 @@
 | :--- | :--- | :--- |
 | **GCP Project ID** | `your-gcp-project-id` | Target Google Cloud Project |
 | **GCS Bucket** | `gs://3mtt-lakehouse-[mentee-name]/` | Primary Lakehouse Storage Bucket |
-| **BigQuery Dataset (Landing/Staging)**| `lnd_stg_dataset` (7-day TTL) | Temporary ingestion & staging dataset |
-| **BigQuery Dataset (Core Fact/Dims)**| `dw_core_dataset` | Permanent warehouse storage |
-| **BigQuery Dataset (Serving Views)** | `dw_analytics_dataset` | Business intelligence layer views |
-| **Audit Log Table** | `dw_core_dataset.pipeline_execution_logs` | Central execution tracking log |
+| **BigQuery Dataset (Landing/Staging)**| `john_lnd_stg_dataset` (7-day TTL) | Temporary ingestion & staging dataset |
+| **BigQuery Dataset (Core Fact/Dims)**| `john_dw_core_dataset` | Permanent warehouse storage |
+| **BigQuery Dataset (Serving Views)** | `john_dw_analytics_dataset` | Business intelligence layer views |
+| **Audit Log Table** | `john_dw_core_dataset.pipeline_execution_logs` | Central execution tracking log |
 | **Iceberg REST Catalog** | Lakekeeper REST Endpoint | Archival catalog manager |
 | **Governance Platform** | OpenMetadata Instance | Lineage, data dictionary & DQ monitor |
 
@@ -225,7 +225,7 @@ mindmap
 
 ## 5. Audit & Logging Specifications
 
-Every pipeline execution step must append audit events to `dw_core_dataset.pipeline_execution_logs`:
+Every pipeline execution step must append audit events to `john_dw_core_dataset.pipeline_execution_logs`:
 
 | Column Name | Data Type | Description |
 | :--- | :--- | :--- |
@@ -246,7 +246,7 @@ Use this checklist to track your project implementation progress:
 - [ ] **Phase 1: Environment & Schema Setup**
   - [ ] Provision GCS Bucket with `landing/`, `temp/`, `archival/`, and `iceberg/` folders.
   - [ ] Upload dimension CSVs to `temp/` and complete manual load into BigQuery `dim_*` tables.
-  - [ ] Create audit log table `dw_core_dataset.pipeline_execution_logs`.
+  - [ ] Create audit log table `john_dw_core_dataset.pipeline_execution_logs`.
 
 - [ ] **Phase 2: Airflow DAG Development**
   - [ ] Implement **DAG 1 (Data Generator)**: Ensure daily 3-file output with deterministic `lnd_YYYYMMDD_1..3.csv` naming.
