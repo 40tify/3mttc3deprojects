@@ -17,16 +17,99 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
+def get_bq_client():
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+
+    credentials_path = "/opt/airflow/credentials/john-big-query-cluster.json"
+    if not os.path.exists(credentials_path):
+        local_creds = os.path.join(os.path.dirname(__file__), "../credentials/john-big-query-cluster.json")
+        if os.path.exists(local_creds):
+            credentials_path = local_creds
+        else:
+            print(f"BigQuery credentials not found at {credentials_path}. Simulating client...")
+            return None
+
+    credentials = service_account.Credentials.from_service_account_file(credentials_path)
+    return bigquery.Client(credentials=credentials, project=credentials.project_id)
+
+def log_audit_event(client, run_id, logical_date, task_id, target_table, rows_processed, status):
+    from google.cloud import bigquery
+    query = f"""
+    INSERT INTO `{client.project}.john_dw_core_dataset.pipeline_execution_logs`
+    (run_id, logical_date, task_id, target_table, rows_processed, execution_status, created_at)
+    VALUES (@run_id, DATE(@logical_date), @task_id, @target_table, @rows_processed, @status, CURRENT_TIMESTAMP())
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("run_id", "STRING", run_id),
+            bigquery.ScalarQueryParameter("logical_date", "STRING", logical_date),
+            bigquery.ScalarQueryParameter("task_id", "STRING", task_id),
+            bigquery.ScalarQueryParameter("target_table", "STRING", target_table),
+            bigquery.ScalarQueryParameter("rows_processed", "INT64", rows_processed),
+            bigquery.ScalarQueryParameter("status", "STRING", status),
+        ]
+    )
+    client.query(query, job_config=job_config).result()
+    print(f"Logged audit event: {task_id} -> {status} (rows: {rows_processed})")
+
 def load_landing_to_bigquery(run_id, logical_date, ds_nodash, **kwargs):
     """
     Step 1: Direct Load raw landing flat files (lnd_YYYYMMDD_1..3.csv) into john_lnd_stg_dataset.lnd_daily_transactions.
     Logs execution task metrics to john_dw_core_dataset.pipeline_execution_logs.
     """
     print(f"DAG 2 ELT Step 1: Ingesting GCS landing files lnd_{ds_nodash}_1..3.csv into BigQuery...")
-    # In production with GCP connection:
-    # Executes BigQuery load job from gs://bucket/landing/lnd_{ds_nodash}_*.csv to john_lnd_stg_dataset.lnd_daily_transactions
-    rows_loaded = 1500
-    print(f"Direct loaded {rows_loaded} raw records into BigQuery john_lnd_stg_dataset.lnd_daily_transactions.")
+    client = get_bq_client()
+    if client is None:
+        print("Simulating load: Direct loaded 1500 raw records into BigQuery.")
+        return
+
+    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    bucket_parts = bucket_name.split('/', 1)
+    actual_bucket = bucket_parts[0]
+    key_prefix = bucket_parts[1] + '/' if len(bucket_parts) > 1 else ''
+    
+    table_id = f"{client.project}.john_lnd_stg_dataset.lnd_daily_transactions"
+    uri = f"gs://{actual_bucket}/{key_prefix}landing/lnd_{ds_nodash}_*.csv"
+    
+    from google.cloud import bigquery
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        autodetect=True,
+    )
+    
+    try:
+        print(f"Loading GCS URI: {uri} into BigQuery table: {table_id}...")
+        load_job = client.load_table_from_uri(uri, table_id, job_config=job_config)
+        load_job.result()  # Wait for completion
+        
+        destination_table = client.get_table(table_id)
+        rows_loaded = destination_table.num_rows
+        print(f"Direct loaded {rows_loaded} raw records into {table_id}.")
+        
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="load_landing_to_bigquery",
+            target_table="john_lnd_stg_dataset.lnd_daily_transactions",
+            rows_processed=rows_loaded,
+            status="SUCCESS"
+        )
+    except Exception as e:
+        print(f"Error loading landing files to BigQuery: {e}")
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="load_landing_to_bigquery",
+            target_table="john_lnd_stg_dataset.lnd_daily_transactions",
+            rows_processed=0,
+            status="FAILED"
+        )
+        raise e
 
 def transform_landing_to_staging(run_id, logical_date, **kwargs):
     """
@@ -34,46 +117,172 @@ def transform_landing_to_staging(run_id, logical_date, **kwargs):
     Enriches raw landing records with john_dw_core_dataset.dim_* lookups and derives agent_commission.
     """
     print("DAG 2 ELT Step 2: Executing BigQuery SQL transform to staging...")
+    client = get_bq_client()
+    if client is None:
+        print("Simulating transform: Transformed 1350 valid records into staging.")
+        return
+
     sql_path = os.path.join(os.path.dirname(__file__), "../sql/02_elt_transform_landing_to_staging.sql")
-    if os.path.exists(sql_path):
+    if not os.path.exists(sql_path):
+        sql_path = os.path.join(os.path.dirname(__file__), "sql/02_elt_transform_landing_to_staging.sql")
+        if not os.path.exists(sql_path):
+            sql_path = "/opt/airflow/sql/02_elt_transform_landing_to_staging.sql"
+
+    try:
         with open(sql_path, "r") as f:
             query = f.read()
-        print(f"Loaded SQL transform query:\n{query[:150]}...")
-    rows_staged = 1350  # Successful non-corrupt transactions
-    print(f"Transformed {rows_staged} valid records into john_lnd_stg_dataset.stg_daily_transactions.")
+        
+        print("Running staging transformation SQL...")
+        query_job = client.query(query)
+        query_job.result()  # Wait for completion
+        
+        destination_table = client.get_table(f"{client.project}.john_lnd_stg_dataset.stg_daily_transactions")
+        rows_staged = destination_table.num_rows
+        print(f"Transformed {rows_staged} valid records into john_lnd_stg_dataset.stg_daily_transactions.")
+        
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="transform_landing_to_staging",
+            target_table="john_lnd_stg_dataset.stg_daily_transactions",
+            rows_processed=rows_staged,
+            status="SUCCESS"
+        )
+    except Exception as e:
+        print(f"Error running staging transform: {e}")
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="transform_landing_to_staging",
+            target_table="john_lnd_stg_dataset.stg_daily_transactions",
+            rows_processed=0,
+            status="FAILED"
+        )
+        raise e
 
 def merge_staging_to_fact(run_id, logical_date, **kwargs):
     """
     Step 3: MERGE valid staging records into john_dw_core_dataset.fact_daily_transactions.
     """
     print("DAG 2 ELT Step 3: Merging staging records into core fact table...")
+    client = get_bq_client()
+    if client is None:
+        print("Simulating merge: Merged 1350 records into fact table.")
+        return
+
     sql_path = os.path.join(os.path.dirname(__file__), "../sql/03_elt_merge_staging_to_fact.sql")
-    if os.path.exists(sql_path):
+    if not os.path.exists(sql_path):
+        sql_path = os.path.join(os.path.dirname(__file__), "sql/03_elt_merge_staging_to_fact.sql")
+        if not os.path.exists(sql_path):
+            sql_path = "/opt/airflow/sql/03_elt_merge_staging_to_fact.sql"
+
+    try:
         with open(sql_path, "r") as f:
             query = f.read()
-        print(f"Loaded SQL MERGE query:\n{query[:150]}...")
-    rows_merged = 1350
-    print(f"Merged {rows_merged} records into john_dw_core_dataset.fact_daily_transactions.")
+            
+        print("Running merge to fact table SQL...")
+        query_job = client.query(query)
+        query_job.result()  # Wait for completion
+        
+        rows_merged = query_job.num_dml_affected_rows
+        print(f"Merged {rows_merged} records into john_dw_core_dataset.fact_daily_transactions.")
+        
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="merge_staging_to_fact",
+            target_table="john_dw_core_dataset.fact_daily_transactions",
+            rows_processed=rows_merged,
+            status="SUCCESS"
+        )
+    except Exception as e:
+        print(f"Error running merge to fact table: {e}")
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="merge_staging_to_fact",
+            target_table="john_dw_core_dataset.fact_daily_transactions",
+            rows_processed=0,
+            status="FAILED"
+        )
+        raise e
 
 def refresh_serving_views(run_id, logical_date, **kwargs):
     """
     Step 4: Re-create / refresh business intelligence views in john_dw_analytics_dataset.
     """
     print("DAG 2 ELT Step 4: Refreshing business intelligence serving views in john_dw_analytics_dataset...")
+    client = get_bq_client()
+    if client is None:
+        print("Simulating view refresh: Views refreshed successfully.")
+        return
+
     sql_path = os.path.join(os.path.dirname(__file__), "../sql/04_create_serving_views.sql")
-    if os.path.exists(sql_path):
+    if not os.path.exists(sql_path):
+        sql_path = os.path.join(os.path.dirname(__file__), "sql/04_create_serving_views.sql")
+        if not os.path.exists(sql_path):
+            sql_path = "/opt/airflow/sql/04_create_serving_views.sql"
+
+    try:
         with open(sql_path, "r") as f:
             query = f.read()
-        print(f"Loaded SQL view creation query:\n{query[:150]}...")
-    print("Refreshed vw_agent_performance, vw_daily_liquidity_summary, and vw_kyc_compliance_risk.")
+            
+        print("Running view creation script...")
+        query_job = client.query(query)
+        query_job.result()  # Wait for completion
+        
+        print("Refreshed vw_agent_performance, vw_daily_liquidity_summary, and vw_kyc_compliance_risk.")
+        
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="refresh_serving_views",
+            target_table="john_dw_analytics_dataset.*",
+            rows_processed=0,
+            status="SUCCESS"
+        )
+    except Exception as e:
+        print(f"Error refreshing serving views: {e}")
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="refresh_serving_views",
+            target_table="john_dw_analytics_dataset.*",
+            rows_processed=0,
+            status="FAILED"
+        )
+        raise e
 
 def log_pipeline_audit_metrics(run_id, logical_date, **kwargs):
     """
     Step 5: Appends task run metrics into john_dw_core_dataset.pipeline_execution_logs.
     """
     print(f"DAG 2 ELT Step 5: Logging audit execution metrics to john_dw_core_dataset.pipeline_execution_logs for run_id={run_id}...")
-    # Schema: run_id, logical_date, task_id, target_table, rows_processed, execution_status, created_at
-    print("Logged SUCCESS status and row counts to audit table.")
+    client = get_bq_client()
+    if client is None:
+        print("Simulating summary: Logged SUCCESS status to audit table.")
+        return
+
+    try:
+        log_audit_event(
+            client=client,
+            run_id=run_id,
+            logical_date=logical_date,
+            task_id="dag2_core_elt_pipeline_dag",
+            target_table="john_dw_core_dataset.fact_daily_transactions",
+            rows_processed=0,
+            status="SUCCESS"
+        )
+        print("Logged overall run success to audit logs table.")
+    except Exception as e:
+        print(f"Error logging pipeline summary audit: {e}")
+        raise e
 
 def archive_processed_landing_files(ds_nodash, **kwargs):
     """
