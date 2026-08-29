@@ -8,8 +8,8 @@ The primary goal of this system is to address operational challenges surrounding
 
 ## 📄 Project Documentation
 
-* **Project Plan:** The complete technical specification, schemas, and SQL transformations are detailed in the [`AgencyBanking_ProjectPLan.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/AgencyBanking_ProjectPLan.md) file.
-* **Project Guide:** The step-by-step setup, requirements checklist, and overview guide can be found in the [`Project-Guide.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docs/Project-Guide.md) file.
+* **Project Plan:** The complete technical specification, schemas, and SQL transformations are detailed in the [`AgencyBanking_ProjectPLan.md`](./AgencyBanking_ProjectPLan.md) file.
+* **Project Guide:** The step-by-step setup, requirements checklist, and overview guide can be found in the [`Project-Guide.md`](./docs/Project-Guide.md) file.
 
 ---
 
@@ -60,8 +60,10 @@ graph TD
 
 ### Logical Data Flow Layers
 1. **Landing Layer (`john_lnd_stg_dataset.lnd_daily_transactions`)**: Raw ingestion layer loaded directly from GCS transactional logs (`landing/lnd_YYYYMMDD_1..3.csv`).
-2. **Staging Layer (`john_lnd_stg_dataset.stg_daily_transactions`)**: Cleans, casts types, performs dimension lookups, filters successful transactions, and computes business metrics (e.g. `agent_commission` calculated as 70% of the transaction fee).
-3. **Core Fact Layer (`john_dw_core_dataset.fact_daily_transactions`)**: Clean, partitioned (by transaction date), and clustered (by agent ID and state) data mart storing final successful transaction events.
+2. **Staging Layer (`john_lnd_stg_dataset.stg_daily_transactions`)**: Cleans, casts types, performs dimension lookups, stages all transaction events (both `SUCCESS` and `FAILED`), and conditionally computes business metrics (e.g. `agent_commission` calculated as 70% of the transaction fee ONLY for successful transactions).
+3. **Core Fact Layer**:
+   * **Successful Fact Table (`john_dw_core_dataset.fact_daily_transactions`)**: Partitioned (by transaction date) and clustered (by agent ID and state) data mart storing successful transaction events. Includes `insert_timestamp` and `update_timestamp` tracking.
+   * **Failed Fact Table (`john_dw_core_dataset.fact_daily_failed_transactions`)**: Partitioned (by transaction date) and clustered (by agent ID and state) data mart storing failed operational events for reliability analysis. Includes `insert_timestamp` and `update_timestamp` tracking.
 4. **Serving Views Layer (`john_dw_analytics_dataset.vw_*`)**: Analytical layer hosting semantic views for business reporting.
 
 ---
@@ -69,37 +71,39 @@ graph TD
 ## 🗄️ Project Repository Map & File Links
 
 ### ⚡ Airflow Orchestration DAGs
-* **DAG 0: One-Time Dimension Loader** ➔ [`dag0_dimension_loader_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/dag0_dimension_loader_dag.py)
-* **DAG 1: Daily Landing Data Generator** ➔ [`agency_banking_data_generator_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_data_generator_dag.py)
-* **DAG 2: Core ELT Pipeline** ➔ [`agency_banking_elt_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_elt_dag.py)
-* **DAG 3: Monthly Iceberg Archival Pipeline** ➔ [`agency_banking_iceberg_archival_dag.py`](file:///c:/Users/ICT/Documents/3mttc3deprojects/dags/agency_banking_iceberg_archival_dag.py)
+* **DAG 0: One-Time Dimension Loader** ➔ [`dag0_dimension_loader_dag.py`](./dags/dag0_dimension_loader_dag.py)
+* **DAG 1: Daily Landing Data Generator** ➔ [`agency_banking_data_generator_dag.py`](./dags/agency_banking_data_generator_dag.py)
+* **DAG 2: Core ELT Pipeline** ➔ [`agency_banking_elt_dag.py`](./dags/agency_banking_elt_dag.py)
+* **DAG 3: Monthly Iceberg Archival Pipeline** ➔ [`agency_banking_iceberg_archival_dag.py`](./dags/agency_banking_iceberg_archival_dag.py)
 
 ### 📊 SQL Database Scripts (BigQuery DDL & ELT Queries)
-* **Dataset & Table DDL Setup:** [`01_create_datasets_and_tables.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/01_create_datasets_and_tables.sql)
-* **Staging Transform query:** [`02_elt_transform_landing_to_staging.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/02_elt_transform_landing_to_staging.sql)
-* **Fact Merge query:** [`03_elt_merge_staging_to_fact.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/03_elt_merge_staging_to_fact.sql)
-* **Serving Views Refresh:** [`04_create_serving_views.sql`](file:///c:/Users/ICT/Documents/3mttc3deprojects/sql/04_create_serving_views.sql)
+* **Dataset & Table DDL Setup:** [`01_create_datasets_and_tables.sql`](./sql/01_create_datasets_and_tables.sql)
+* **Staging Transform query:** [`02_elt_transform_landing_to_staging.sql`](./sql/02_elt_transform_landing_to_staging.sql)
+* **Fact Merge query:** [`03_elt_merge_staging_to_fact.sql`](./sql/03_elt_merge_staging_to_fact.sql)
+* **Serving Views Refresh:** [`04_create_serving_views.sql`](./sql/04_create_serving_views.sql)
 
 ### 🛡️ Data Governance & Quality Setup
-* **OpenMetadata configuration:** [`openmetadata_config.yaml`](file:///c:/Users/ICT/Documents/3mttc3deprojects/governance/openmetadata_config.yaml)
+* **OpenMetadata configuration:** [`openmetadata_config.yaml`](./governance/openmetadata_config.yaml)
 
 ### 📦 Containerization & Environment Configuration
-* **Docker Compose Orchestration:** [`docker-compose.yaml`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docker-compose.yaml)
-* **Custom Airflow Image Build:** [`Dockerfile`](file:///c:/Users/ICT/Documents/3mttc3deprojects/Dockerfile)
-* **Local Python Dependencies:** [`requirements.txt`](file:///c:/Users/ICT/Documents/3mttc3deprojects/requirements.txt)
+* **Docker Compose Orchestration:** [`docker-compose.yaml`](./docker-compose.yaml)
+* **Custom Airflow Image Build:** [`Dockerfile`](./Dockerfile)
+* **Local Python Dependencies:** [`requirements.txt`](./requirements.txt)
 
 ---
 
 ## 🗄️ Database Schema Summary
 
 ### Dimension Tables (`john_dw_core_dataset`)
+All dimension tables contain `insert_timestamp` and `update_timestamp` columns to track ingestion and modifications.
 * **`dim_agents`**: POS agent names, business names, tier levels, and terminal hardware mappings.
 * **`dim_customers`**: Customer registration profiles, account types, and KYC statuses.
 * **`dim_transaction_types`**: Transaction categories (e.g. cash-in, cash-out, airtime) and direction.
 * **`dim_geography`**: Geographical mapping of terminals (regions, states, LGAs).
 
 ### Core Fact & Logs (`john_dw_core_dataset`)
-* **`fact_daily_transactions`**: Partitoned and clustered transaction logs enriched with geographical lookups and derived commissions.
+* **`fact_daily_transactions`**: Partitioned and clustered transaction logs storing successful transaction events, enriched with geographical lookups, derived commissions, and audit timestamps.
+* **`fact_daily_failed_transactions`**: Partitioned and clustered logs storing failed operational transactions for error analysis, enriched with metadata and audit timestamps.
 * **`pipeline_execution_logs`**: Logs step-by-step metadata (logical dates, rows processed, runtime status) across the entire pipeline.
 
 ---

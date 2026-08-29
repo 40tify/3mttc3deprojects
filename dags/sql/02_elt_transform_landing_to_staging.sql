@@ -22,7 +22,10 @@ SELECT
   CAST(l.amount AS NUMERIC) AS transaction_amount,
   CAST(l.fee_charged AS NUMERIC) AS fee_charged,
   -- Business logic rule: Agents earn 70% of fee charged for successful transactions
-  ROUND(CAST(l.fee_charged AS NUMERIC) * 0.70, 2) AS agent_commission,
+  CASE 
+    WHEN UPPER(l.status) = 'SUCCESS' THEN ROUND(CAST(l.fee_charged AS NUMERIC) * 0.70, 2)
+    ELSE CAST(0.0 AS NUMERIC)
+  END AS agent_commission,
   l.status AS transaction_status,
   CURRENT_TIMESTAMP() AS transformed_at
 FROM `john_lnd_stg_dataset.lnd_daily_transactions` l
@@ -34,7 +37,7 @@ LEFT JOIN `john_dw_core_dataset.dim_customers` c
   ON l.custphone = c.customer_phone
 LEFT JOIN `john_dw_core_dataset.dim_transaction_types` t 
   ON l.txntypecode = t.txn_type_id
-WHERE UPPER(l.status) = 'SUCCESS'
+WHERE UPPER(l.status) IN ('SUCCESS', 'FAILED')
   AND l.txnid IS NOT NULL
   AND l.createdat IS NOT NULL
   AND l.terminalid IS NOT NULL

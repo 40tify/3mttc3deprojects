@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.dim_geography` (
   location_cluster STRING NOT NULL,
   lga STRING NOT NULL,
   state STRING NOT NULL,
-  region STRING NOT NULL
+  region STRING NOT NULL,
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 OPTIONS(description="Geographic region, state, LGA, and location cluster lookup dimension");
 
@@ -42,7 +44,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.dim_agents` (
   terminal_id STRING NOT NULL,
   tier_level STRING NOT NULL,
   signup_date DATE,
-  geo_id INT64
+  geo_id INT64,
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 OPTIONS(description="Banking agent profiles, assigned terminals, tier levels, and assigned geographic IDs");
 
@@ -51,7 +55,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.dim_customers` (
   customer_phone STRING NOT NULL,
   kyc_status STRING NOT NULL,
   account_type STRING NOT NULL,
-  registration_date DATE
+  registration_date DATE,
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 OPTIONS(description="Registered customer details, KYC compliance status, and account types");
 
@@ -59,7 +65,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.dim_transaction_types` (
   txn_type_id INT64 NOT NULL,
   txn_name STRING NOT NULL,
   direction STRING NOT NULL,
-  is_financial BOOLEAN NOT NULL
+  is_financial BOOLEAN NOT NULL,
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 OPTIONS(description="Transaction classification lookup table defining payment direction and financial status");
 
@@ -104,14 +112,45 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_transactions` (
   transaction_amount NUMERIC NOT NULL,
   fee_charged NUMERIC NOT NULL,
   agent_commission NUMERIC NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 PARTITION BY transaction_date
 CLUSTER BY agent_id, state
 OPTIONS(description="Core transactional fact table partitioned by transaction date and clustered by agent ID and state");
 
 -- -----------------------------------------------------------------------------
--- 5. Create Pipeline Execution Audit Log Table in john_dw_core_dataset
+-- 5. Create Core Failed Fact Table in john_dw_core_dataset (Partitioned & Clustered)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_failed_transactions` (
+  transaction_id STRING NOT NULL,
+  transaction_timestamp TIMESTAMP NOT NULL,
+  transaction_date DATE NOT NULL,
+  agent_id INT64,
+  agent_name STRING,
+  terminal_id STRING NOT NULL,
+  location_cluster STRING,
+  lga STRING,
+  state STRING,
+  region STRING,
+  customer_phone STRING,
+  kyc_status STRING,
+  txn_type_id INT64,
+  transaction_name STRING,
+  direction STRING,
+  transaction_amount NUMERIC NOT NULL,
+  fee_charged NUMERIC NOT NULL,
+  transaction_status STRING NOT NULL,
+  insert_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+  update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+)
+PARTITION BY transaction_date
+CLUSTER BY agent_id, state
+OPTIONS(description="Core transactional failed fact table partitioned by transaction date and clustered by agent ID and state");
+
+-- -----------------------------------------------------------------------------
+-- 6. Create Pipeline Execution Audit Log Table in john_dw_core_dataset
 -- -----------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.pipeline_execution_logs` (

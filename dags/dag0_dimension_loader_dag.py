@@ -4,15 +4,52 @@ from datetime import datetime, timedelta
 import pandas as pd
 from faker import Faker
 import boto3
+from botocore.config import Config
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.hooks.base import BaseHook
+from airflow.models import Variable
 
 # Initialize Faker with Nigerian context
 fake = Faker(['en_NG'])
 
 LOCAL_DATA_DIR = "/opt/airflow/data"
 os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+
+def get_gcs_client_and_bucket():
+    """
+    Retrieves GCS HMAC credentials from the Airflow connection 'gcp_hmac_conn'
+    and bucket name from the Airflow Variable 'gcs_bucket_name'.
+    Falls back to environment variables if they are not defined.
+    """
+    # 1. Retrieve connection
+    try:
+        conn = BaseHook.get_connection('gcp_hmac_conn')
+        access_key = conn.login
+        secret_key = conn.password
+    except Exception as e:
+        print(f"Connection 'gcp_hmac_conn' not found: {e}. Falling back to env variables.")
+        access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
+        secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
+
+    # 2. Retrieve bucket name
+    bucket_name = Variable.get("gcs_bucket_name", default_var=os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking"))
+
+    # 3. Create s3 client if credentials exist
+    if access_key and secret_key:
+        s3_client = boto3.client(
+            's3',
+            region_name='auto',
+            endpoint_url='https://storage.googleapis.com',
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version='s3v4')
+        )
+        return s3_client, bucket_name
+    else:
+        print("GCP HMAC credentials not configured.")
+        return None, bucket_name
 
 default_args = {
     'owner': 'agency_banking_ops',
@@ -113,9 +150,7 @@ def generate_dimensions_csv(**kwargs):
 
 def upload_dimensions_to_gcs(**kwargs):
     """Uploads seed dimension CSV files to gs://.../temp/ directory in GCS."""
-    access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
-    secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    s3_client, bucket_name = get_gcs_client_and_bucket()
 
     dim_files = [
         "dim_geography.csv",
@@ -124,16 +159,9 @@ def upload_dimensions_to_gcs(**kwargs):
         "dim_customers.csv"
     ]
 
-    if not access_key or not secret_key:
+    if not s3_client:
         print("HMAC credentials not supplied. Dimension CSV files generated locally in temp storage.")
         return
-
-    s3_client = boto3.client(
-        's3',
-        endpoint_url='https://storage.googleapis.com',
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key
-    )
 
     # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
     bucket_parts = bucket_name.split('/', 1)
@@ -167,7 +195,7 @@ def load_dimensions_to_bigquery(**kwargs):
     credentials = service_account.Credentials.from_service_account_file(credentials_path)
     client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    _, bucket_name = get_gcs_client_and_bucket()
     bucket_parts = bucket_name.split('/', 1)
     actual_bucket = bucket_parts[0]
     key_prefix = bucket_parts[1] + '/' if len(bucket_parts) > 1 else ''

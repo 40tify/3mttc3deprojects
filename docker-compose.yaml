@@ -72,6 +72,13 @@ services:
             --lastname User \
             --role Admin \
             --email admin@example.com || true
+        # Create Airflow Connection for GCP HMAC
+        airflow connections add 'gcp_hmac_conn' \
+            --conn-type 'generic' \
+            --conn-login "$$GCP_HMAC_ACCESS_KEY" \
+            --conn-password "$$GCP_HMAC_SECRET_KEY" || true
+        # Create Airflow Variable for Bucket Name
+        airflow variables set 'gcs_bucket_name' "$$GCP_BUCKET_NAME" || true
         echo "Airflow initialization complete!"
 
 volumes:

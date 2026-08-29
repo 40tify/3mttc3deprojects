@@ -5,8 +5,44 @@ from botocore.config import Config
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.hooks.base import BaseHook
+from airflow.models import Variable
 
 LOCAL_DATA_DIR = "/opt/airflow/data"
+
+def get_gcs_client_and_bucket():
+    """
+    Retrieves GCS HMAC credentials from the Airflow connection 'gcp_hmac_conn'
+    and bucket name from the Airflow Variable 'gcs_bucket_name'.
+    Falls back to environment variables if they are not defined.
+    """
+    # 1. Retrieve connection
+    try:
+        conn = BaseHook.get_connection('gcp_hmac_conn')
+        access_key = conn.login
+        secret_key = conn.password
+    except Exception as e:
+        print(f"Connection 'gcp_hmac_conn' not found: {e}. Falling back to env variables.")
+        access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
+        secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
+
+    # 2. Retrieve bucket name
+    bucket_name = Variable.get("gcs_bucket_name", default_var=os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking"))
+
+    # 3. Create s3 client if credentials exist
+    if access_key and secret_key:
+        s3_client = boto3.client(
+            's3',
+            region_name='auto',
+            endpoint_url='https://storage.googleapis.com',
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version='s3v4')
+        )
+        return s3_client, bucket_name
+    else:
+        print("GCP HMAC credentials not configured.")
+        return None, bucket_name
 
 default_args = {
     'owner': 'agency_banking_ops',
@@ -64,7 +100,7 @@ def load_landing_to_bigquery(run_id, logical_date, ds_nodash, **kwargs):
         print("Simulating load: Direct loaded 1500 raw records into BigQuery.")
         return
 
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    _, bucket_name = get_gcs_client_and_bucket()
     bucket_parts = bucket_name.split('/', 1)
     actual_bucket = bucket_parts[0]
     key_prefix = bucket_parts[1] + '/' if len(bucket_parts) > 1 else ''
@@ -164,12 +200,13 @@ def transform_landing_to_staging(run_id, logical_date, **kwargs):
 
 def merge_staging_to_fact(run_id, logical_date, **kwargs):
     """
-    Step 3: MERGE valid staging records into john_dw_core_dataset.fact_daily_transactions.
+    Step 3: MERGE valid staging records into john_dw_core_dataset.fact_daily_transactions (success)
+    and john_dw_core_dataset.fact_daily_failed_transactions (failed).
     """
-    print("DAG 2 ELT Step 3: Merging staging records into core fact table...")
+    print("DAG 2 ELT Step 3: Merging staging records into core fact tables...")
     client = get_bq_client()
     if client is None:
-        print("Simulating merge: Merged 1350 records into fact table.")
+        print("Simulating merge: Merged 1350 records into fact tables.")
         return
 
     sql_path = os.path.join(os.path.dirname(__file__), "../sql/03_elt_merge_staging_to_fact.sql")
@@ -182,12 +219,12 @@ def merge_staging_to_fact(run_id, logical_date, **kwargs):
         with open(sql_path, "r") as f:
             query = f.read()
             
-        print("Running merge to fact table SQL...")
+        print("Running merge to fact tables SQL...")
         query_job = client.query(query)
         query_job.result()  # Wait for completion
         
         rows_merged = query_job.num_dml_affected_rows
-        print(f"Merged {rows_merged} records into john_dw_core_dataset.fact_daily_transactions.")
+        print(f"Merged {rows_merged} records into core fact tables (success and failed).")
         
         log_audit_event(
             client=client,
@@ -199,7 +236,7 @@ def merge_staging_to_fact(run_id, logical_date, **kwargs):
             status="SUCCESS"
         )
     except Exception as e:
-        print(f"Error running merge to fact table: {e}")
+        print(f"Error running merge to fact tables: {e}")
         log_audit_event(
             client=client,
             run_id=run_id,
@@ -288,26 +325,13 @@ def archive_processed_landing_files(ds_nodash, **kwargs):
     """
     Step 6: File Hygiene - Automatically move ingested CSV files from landing/ to archival/ folder in GCS.
     """
-    access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
-    secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    s3_client, bucket_name = get_gcs_client_and_bucket()
 
     print(f"DAG 2 ELT Step 6: Archiving processed CSV files for {ds_nodash} from landing/ to archival/...")
 
-    if not access_key or not secret_key:
+    if not s3_client:
         print("HMAC credentials not supplied. File move simulated locally.")
         return
-
-    s3_client = boto3.client(
-        's3',
-        region_name='auto',
-        endpoint_url='https://storage.googleapis.com',
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=Config(
-            signature_version='s3v4'
-        )
-    )
 
     # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
     bucket_parts = bucket_name.split('/', 1)

@@ -8,12 +8,69 @@ from botocore.config import Config
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.hooks.base import BaseHook
+from airflow.models import Variable
 
 # Initialize Faker with Nigerian context
 fake = Faker(['en_NG'])
 
 LOCAL_DATA_DIR = "/opt/airflow/data"
 os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+
+def get_gcs_client_and_bucket():
+    """
+    Retrieves GCS HMAC credentials from the Airflow connection 'gcp_hmac_conn'
+    and bucket name from the Airflow Variable 'gcs_bucket_name'.
+    Falls back to environment variables if they are not defined.
+    """
+    # 1. Retrieve connection
+    try:
+        conn = BaseHook.get_connection('gcp_hmac_conn')
+        access_key = conn.login
+        secret_key = conn.password
+    except Exception as e:
+        print(f"Connection 'gcp_hmac_conn' not found: {e}. Falling back to env variables.")
+        access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
+        secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
+
+    # 2. Retrieve bucket name
+    bucket_name = Variable.get("gcs_bucket_name", default_var=os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking"))
+
+    # 3. Create s3 client if credentials exist
+    if access_key and secret_key:
+        s3_client = boto3.client(
+            's3',
+            region_name='auto',
+            endpoint_url='https://storage.googleapis.com',
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version='s3v4')
+        )
+        return s3_client, bucket_name
+    else:
+        print("GCP HMAC credentials not configured.")
+        return None, bucket_name
+
+def ensure_dim_customers_local(s3_client, bucket_name, local_dir):
+    """Ensures dim_customers.csv is present in local_dir by downloading it from GCS if missing."""
+    local_path = os.path.join(local_dir, "dim_customers.csv")
+    if os.path.exists(local_path):
+        print(f"dim_customers.csv found locally at {local_path}.")
+        return
+
+    # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
+    bucket_parts = bucket_name.split('/', 1)
+    actual_bucket = bucket_parts[0]
+    key_prefix = bucket_parts[1] + '/' if len(bucket_parts) > 1 else ''
+    gcs_key = f"{key_prefix}temp/dim_customers.csv"
+
+    print(f"dim_customers.csv not found locally. Attempting download from gs://{actual_bucket}/{gcs_key}...")
+    try:
+        os.makedirs(local_dir, exist_ok=True)
+        s3_client.download_file(actual_bucket, gcs_key, local_path)
+        print(f"Successfully downloaded dim_customers.csv from GCS to {local_path}.")
+    except Exception as e:
+        print(f"Warning: Failed to download dim_customers.csv from GCS: {e}")
 
 default_args = {
     'owner': 'agency_banking_ops',
@@ -34,6 +91,13 @@ def generate_daily_landing_files(ds, ds_nodash, **kwargs):
     Idempotent: Re-running for a logical date reproduces the exact same 3 files.
     """
     print(f"DAG 1: Generating 3 deterministic landing files for logical date: {ds}")
+    
+    # 1. Retrieve credentials and bucket name
+    s3_client, bucket_name = get_gcs_client_and_bucket()
+    
+    # 2. Ensure dim_customers.csv is local by downloading from GCS temp/ if needed
+    if s3_client:
+        ensure_dim_customers_local(s3_client, bucket_name, LOCAL_DATA_DIR)
     
     # Deterministic seeding per logical date
     seed_val = int(ds_nodash)
@@ -125,24 +189,11 @@ def generate_daily_landing_files(ds, ds_nodash, **kwargs):
 
 def upload_landing_files_to_gcs(ds_nodash, **kwargs):
     """Uploads the 3 daily landing CSV files to gs://.../landing/ in GCS."""
-    access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
-    secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    s3_client, bucket_name = get_gcs_client_and_bucket()
 
-    if not access_key or not secret_key:
+    if not s3_client:
         print("HMAC credentials not supplied. Landing files stored in local container directory.")
         return
-
-    s3_client = boto3.client(
-        's3',
-        region_name='auto',
-        endpoint_url='https://storage.googleapis.com',
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=Config(
-            signature_version='s3v4'
-        )
-    )
 
     # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
     bucket_parts = bucket_name.split('/', 1)

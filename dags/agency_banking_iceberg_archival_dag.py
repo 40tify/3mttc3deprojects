@@ -5,6 +5,42 @@ from botocore.config import Config
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.hooks.base import BaseHook
+from airflow.models import Variable
+
+def get_gcs_client_and_bucket():
+    """
+    Retrieves GCS HMAC credentials from the Airflow connection 'gcp_hmac_conn'
+    and bucket name from the Airflow Variable 'gcs_bucket_name'.
+    Falls back to environment variables if they are not defined.
+    """
+    # 1. Retrieve connection
+    try:
+        conn = BaseHook.get_connection('gcp_hmac_conn')
+        access_key = conn.login
+        secret_key = conn.password
+    except Exception as e:
+        print(f"Connection 'gcp_hmac_conn' not found: {e}. Falling back to env variables.")
+        access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
+        secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
+
+    # 2. Retrieve bucket name
+    bucket_name = Variable.get("gcs_bucket_name", default_var=os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking"))
+
+    # 3. Create s3 client if credentials exist
+    if access_key and secret_key:
+        s3_client = boto3.client(
+            's3',
+            region_name='auto',
+            endpoint_url='https://storage.googleapis.com',
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version='s3v4')
+        )
+        return s3_client, bucket_name
+    else:
+        print("GCP HMAC credentials not configured.")
+        return None, bucket_name
 
 default_args = {
     'owner': 'agency_banking_ops',
@@ -28,9 +64,7 @@ def write_to_iceberg_catalog(ds, ds_nodash, **kwargs):
     Step 2: Offloads aged fact records to Lakekeeper REST Catalog / Iceberg table format in GCS iceberg/ directory.
     Idempotency: Performs partition overwrite so re-running overwrites target monthly partitions without duplicating rows.
     """
-    access_key = os.getenv("GCP_HMAC_ACCESS_KEY")
-    secret_key = os.getenv("GCP_HMAC_SECRET_KEY")
-    bucket_name = os.getenv("GCP_BUCKET_NAME", "3mtt-lakehouse-agencybanking")
+    s3_client, bucket_name = get_gcs_client_and_bucket()
     catalog_endpoint = os.getenv("ICEBERG_REST_CATALOG_URL", "http://lakekeeper.internal:8080")
 
     # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
@@ -41,17 +75,7 @@ def write_to_iceberg_catalog(ds, ds_nodash, **kwargs):
     print(f"DAG 3: Connecting to Iceberg Lakekeeper REST Catalog at {catalog_endpoint}...")
     print(f"Writing monthly Iceberg Parquet partitions and metadata to gs://{actual_bucket}/{key_prefix}iceberg/fact_daily_transactions/...")
 
-    if access_key and secret_key:
-        s3_client = boto3.client(
-            's3',
-            region_name='auto',
-            endpoint_url='https://storage.googleapis.com',
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=Config(
-                signature_version='s3v4'
-            )
-        )
+    if s3_client:
         metadata_key = f"{key_prefix}iceberg/fact_daily_transactions/metadata/v1.metadata.json"
         print(f"Verified Iceberg table state updated at gs://{actual_bucket}/{metadata_key}")
 

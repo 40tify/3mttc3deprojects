@@ -1,7 +1,7 @@
 # Agency Banking & Mobile Money Lakehouse Data Pipeline - Project Plan
 
 > [!IMPORTANT]
-> **Project Goal**: Build a governed, end-to-end Lakehouse pipeline using Apache Airflow, Google Cloud Storage (GCS), BigQuery, Apache Iceberg, and OpenMetadata based on [`Project-Guide.md`](file:///c:/Users/ICT/Documents/3mttc3deprojects/docs/Project-Guide.md).
+> **Project Goal**: Build a governed, end-to-end Lakehouse pipeline using Apache Airflow, Google Cloud Storage (GCS), BigQuery, Apache Iceberg, and OpenMetadata based on [`Project-Guide.md`](./docs/Project-Guide.md).
 
 ---
 
@@ -90,15 +90,16 @@ flowchart TD
 ## 3. Data Model & Schemas
 
 ### Dimension Tables (`john_dw_core_dataset`)
+All dimension tables include `insert_timestamp` and `update_timestamp` columns (defaulting to `CURRENT_TIMESTAMP()`) to support backups, delta loading, and incremental updates.
 
 1. **`dim_agents`**:
-   - `agent_id` (INT64, PK), `agent_name` (STRING), `business_name` (STRING), `terminal_id` (STRING), `tier_level` (STRING), `signup_date` (DATE)
+   - `agent_id` (INT64, PK), `agent_name` (STRING), `business_name` (STRING), `terminal_id` (STRING), `tier_level` (STRING), `signup_date` (DATE), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 2. **`dim_customers`**:
-   - `customer_id` (INT64, PK), `customer_phone` (STRING), `kyc_status` (STRING), `account_type` (STRING), `registration_date` (DATE)
+   - `customer_id` (INT64, PK), `customer_phone` (STRING), `kyc_status` (STRING), `account_type` (STRING), `registration_date` (DATE), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 3. **`dim_transaction_types`**:
-   - `txn_type_id` (INT64, PK), `txn_name` (STRING), `direction` (STRING), `is_financial` (BOOLEAN)
+   - `txn_type_id` (INT64, PK), `txn_name` (STRING), `direction` (STRING), `is_financial` (BOOLEAN), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 4. **`dim_geography`**:
-   - `geo_id` (INT64, PK), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING)
+   - `geo_id` (INT64, PK), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 
 ### Landing Table (`john_lnd_stg_dataset.lnd_daily_transactions`)
 - Raw ingestion table populated directly from GCS flat files (`lnd_YYYYMMDD_1..3.csv`).
@@ -106,11 +107,16 @@ flowchart TD
 
 ### Staging Table (`john_lnd_stg_dataset.stg_daily_transactions`)
 - Created via `CREATE OR REPLACE TABLE` in SQL during DAG 2 ELT execution.
-- Performs dimension lookups, string parsing, timestamp conversion, and calculates `agent_commission` (`fee_charged * 0.70`).
+- Captures both successful and failed transactions (previously discarded).
+- Performs dimension lookups, string parsing, type casting, and conditionally calculates `agent_commission` (70% of transaction fee ONLY for successful transactions; 0 for failed transactions).
 
-### Partitioned Fact Table (`john_dw_core_dataset.fact_daily_transactions`)
-- Partitioned by `DATE(transaction_timestamp)` and clustered by `agent_id`, `state`.
-- Schema: `transaction_id` (STRING), `transaction_timestamp` (TIMESTAMP), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `agent_commission` (NUMERIC)
+### Successful Fact Table (`john_dw_core_dataset.fact_daily_transactions`)
+- Stores successful financial events. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `state`.
+- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `agent_commission` (NUMERIC), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
+
+### Failed Fact Table (`john_dw_core_dataset.fact_daily_failed_transactions`)
+- Stores failed operational events for debugging and reliability tracking. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `state`.
+- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `transaction_status` (STRING), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 
 ### Serving Views (`john_dw_analytics_dataset`)
 1. **`vw_agent_performance`**: Summarizes total transactions, transaction volume, gross fees, and agent commission earnings by agent tier and cluster.
@@ -121,23 +127,31 @@ flowchart TD
 
 ## 4. Pipeline Execution Workflow
 
+### Configuration & Secret Management (Best Practice)
+All DAGs connect to Google Cloud Storage using an Airflow Connection `gcp_hmac_conn` (storing the GCP HMAC access key and secret key) and an Airflow Variable `gcs_bucket_name` (storing the GCS bucket name). These are automatically seeded upon container startup using `hmac_credentials.env` inside the `airflow-init` container.
+
 ### DAG 0: One-Time Dimension Loader (`@once`)
 - Generates static/seed dimension CSVs (`dim_agents`, `dim_customers`, `dim_transaction_types`, `dim_geography`).
-- Uploads CSVs to `gs://.../temp/`.
+- Uploads CSVs to `gs://.../temp/` via `gcp_hmac_conn`.
 - Executes one-time load into BigQuery `john_dw_core_dataset.dim_*` tables.
 
 ### DAG 1: Daily Landing Data Generator (`@daily`)
-- Simulates daily POS operational logs.
+- **Staging Sync (Hidden Dependency Fix)**: Prior to generating daily operational logs, it runs `ensure_dim_customers_local()` to verify if `dim_customers.csv` exists on local container storage. If it is missing (e.g., in a fresh container launch), it downloads it automatically from GCS `temp/dim_customers.csv` using `gcp_hmac_conn` to guarantee referential phone numbers integrity.
+- Simulates daily POS operational logs (injecting 10% bad data for schema validation).
 - Outputs exactly 3 deterministic CSV files per daily logical date: `landing/lnd_YYYYMMDD_1.csv`, `landing/lnd_YYYYMMDD_2.csv`, `landing/lnd_YYYYMMDD_3.csv`.
+- Uploads them to GCS `landing/` using `gcp_hmac_conn`.
 - Guarantees idempotency (re-running overwrites exact 3 files).
 
 ### DAG 2: Core ELT Pipeline (`@daily`)
 - **Step 1: Direct Load**: Reads GCS `landing/` CSVs for `logical_date` into BigQuery `john_lnd_stg_dataset.lnd_daily_transactions`.
-- **Step 2: SQL Staging Transform**: Runs `CREATE OR REPLACE TABLE stg_daily_transactions` joining raw landing records with dimension tables, cleaning data, and deriving `agent_commission`.
-- **Step 3: Fact Upsert/Merge**: Runs SQL `MERGE` into partitioned `john_dw_core_dataset.fact_daily_transactions`.
+- **Step 2: SQL Staging Transform**: Runs `CREATE OR REPLACE TABLE stg_daily_transactions` staging all transactions (both `SUCCESS` and `FAILED`). Derives `agent_commission` conditionally (only successful transactions earn commission).
+- **Step 3: Double Fact Upsert/Merge**: Runs parallel SQL `MERGE` statements:
+  * Successful staging transactions are merged into `john_dw_core_dataset.fact_daily_transactions`.
+  * Failed staging transactions are merged into `john_dw_core_dataset.fact_daily_failed_transactions`.
+  * Audit columns `insert_timestamp` and `update_timestamp` are updated accordingly.
 - **Step 4: Audit Metrics Logging**: Appends task execution row to `john_dw_core_dataset.pipeline_execution_logs`.
-- **Step 5: Refresh Serving Views**: Refreshes views in `john_dw_analytics_dataset`.
-- **Step 6: File Hygiene & Archival**: Moves ingested flat files from `landing/` to `archival/` in GCS.
+- **Step 5: Refresh Serving Views**: Refreshes serving views in `john_dw_analytics_dataset`.
+- **Step 6: File Hygiene & Archival**: Moves ingested flat files from GCS `landing/` to `archival/` using `gcp_hmac_conn`.
 
 ### DAG 3: Iceberg Archival Pipeline (`@monthly`)
 - Queries fact table records older than retention period ($N$ months).
