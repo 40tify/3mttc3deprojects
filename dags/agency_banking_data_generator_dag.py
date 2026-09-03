@@ -15,6 +15,10 @@ from airflow.models import Variable
 fake = Faker(['en_NG'])
 
 LOCAL_DATA_DIR = "/opt/airflow/data"
+if not os.path.exists(LOCAL_DATA_DIR):
+    local_dir_fallback = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+    if os.path.exists(local_dir_fallback):
+        LOCAL_DATA_DIR = local_dir_fallback
 os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
 
 def get_gcs_client_and_bucket():
@@ -51,26 +55,37 @@ def get_gcs_client_and_bucket():
         print("GCP HMAC credentials not configured.")
         return None, bucket_name
 
-def ensure_dim_customers_local(s3_client, bucket_name, local_dir):
-    """Ensures dim_customers.csv is present in local_dir by downloading it from GCS if missing."""
-    local_path = os.path.join(local_dir, "dim_customers.csv")
-    if os.path.exists(local_path):
-        print(f"dim_customers.csv found locally at {local_path}.")
-        return
-
-    # Handle bucket names configured with subdirectories/prefixes (e.g. 'bucket-name/prefix')
+def ensure_dimension_files_local(s3_client, bucket_name, local_dir):
+    """
+    Ensures that all prerequisite seed dimension CSV files exist locally in local_dir.
+    If any file is missing locally, attempts to download it from gs://.../temp/.
+    """
+    dim_files = [
+        "dim_customers.csv",
+        "dim_agents.csv",
+        "dim_transaction_types.csv",
+        "dim_geography.csv"
+    ]
+    
     bucket_parts = bucket_name.split('/', 1)
     actual_bucket = bucket_parts[0]
     key_prefix = bucket_parts[1] + '/' if len(bucket_parts) > 1 else ''
-    gcs_key = f"{key_prefix}temp/dim_customers.csv"
 
-    print(f"dim_customers.csv not found locally. Attempting download from gs://{actual_bucket}/{gcs_key}...")
-    try:
-        os.makedirs(local_dir, exist_ok=True)
-        s3_client.download_file(actual_bucket, gcs_key, local_path)
-        print(f"Successfully downloaded dim_customers.csv from GCS to {local_path}.")
-    except Exception as e:
-        print(f"Warning: Failed to download dim_customers.csv from GCS: {e}")
+    for filename in dim_files:
+        local_path = os.path.join(local_dir, filename)
+        if os.path.exists(local_path):
+            print(f"Dimension file '{filename}' found locally at {local_path}.")
+            continue
+        
+        if s3_client:
+            gcs_key = f"{key_prefix}temp/{filename}"
+            print(f"Dimension file '{filename}' missing locally. Attempting download from gs://{actual_bucket}/{gcs_key}...")
+            try:
+                os.makedirs(local_dir, exist_ok=True)
+                s3_client.download_file(actual_bucket, gcs_key, local_path)
+                print(f"Successfully downloaded '{filename}' from GCS to {local_path}.")
+            except Exception as e:
+                print(f"Notice: Could not download '{filename}' from GCS ({e}).")
 
 default_args = {
     'owner': 'agency_banking_ops',
@@ -84,36 +99,58 @@ default_args = {
 def generate_daily_landing_files(ds, ds_nodash, **kwargs):
     """
     Generates 3 deterministic daily transaction landing CSV files for logical date ds.
-    Files generated:
-      - lnd_YYYYMMDD_1.csv
-      - lnd_YYYYMMDD_2.csv
-      - lnd_YYYYMMDD_3.csv
-    Idempotent: Re-running for a logical date reproduces the exact same 3 files.
+    Enforces strict referential integrity by loading customer phones, terminal IDs,
+    and transaction types directly from the seed dimension CSV files produced by DAG 0.
     """
     print(f"DAG 1: Generating 3 deterministic landing files for logical date: {ds}")
     
     # 1. Retrieve credentials and bucket name
     s3_client, bucket_name = get_gcs_client_and_bucket()
     
-    # 2. Ensure dim_customers.csv is local by downloading from GCS temp/ if needed
-    if s3_client:
-        ensure_dim_customers_local(s3_client, bucket_name, LOCAL_DATA_DIR)
+    # 2. Ensure dimension files are local by downloading from GCS temp/ if needed
+    ensure_dimension_files_local(s3_client, bucket_name, LOCAL_DATA_DIR)
     
+    # 3. Load and validate prerequisite dimension datasets (no random fallbacks)
+    customers_path = os.path.join(LOCAL_DATA_DIR, "dim_customers.csv")
+    if not os.path.exists(customers_path):
+        raise FileNotFoundError(
+            f"Required dimension file '{customers_path}' not found. "
+            "DAG 0 (dag0_dimension_loader_dag) must be executed first to generate seed dimensions."
+        )
+    customer_df = pd.read_csv(customers_path)
+    if "customer_phone" not in customer_df.columns or customer_df.empty:
+        raise ValueError("dim_customers.csv is empty or missing 'customer_phone' column.")
+    customer_phones = customer_df["customer_phone"].astype(str).tolist()
+
+    agents_path = os.path.join(LOCAL_DATA_DIR, "dim_agents.csv")
+    if not os.path.exists(agents_path):
+        raise FileNotFoundError(
+            f"Required dimension file '{agents_path}' not found. "
+            "DAG 0 (dag0_dimension_loader_dag) must be executed first to generate seed dimensions."
+        )
+    agents_df = pd.read_csv(agents_path)
+    if "terminal_id" not in agents_df.columns or agents_df.empty:
+        raise ValueError("dim_agents.csv is empty or missing 'terminal_id' column.")
+    terminals = agents_df["terminal_id"].astype(str).tolist()
+
+    txn_types_path = os.path.join(LOCAL_DATA_DIR, "dim_transaction_types.csv")
+    if not os.path.exists(txn_types_path):
+        raise FileNotFoundError(
+            f"Required dimension file '{txn_types_path}' not found. "
+            "DAG 0 (dag0_dimension_loader_dag) must be executed first to generate seed dimensions."
+        )
+    txn_types_df = pd.read_csv(txn_types_path)
+    if "txn_type_id" not in txn_types_df.columns or txn_types_df.empty:
+        raise ValueError("dim_transaction_types.csv is empty or missing 'txn_type_id' column.")
+    txn_types = txn_types_df["txn_type_id"].astype(int).tolist()
+
+    print(f"Referential lookup ready: {len(customer_phones)} customers, {len(terminals)} terminals, {len(txn_types)} txn types.")
+
     # Deterministic seeding per logical date
     seed_val = int(ds_nodash)
     random.seed(seed_val)
     Faker.seed(seed_val)
-    
-    # Load or fallback to customer phone numbers
-    customers_path = os.path.join(LOCAL_DATA_DIR, "dim_customers.csv")
-    if os.path.exists(customers_path):
-        customer_df = pd.read_csv(customers_path)
-        customer_phones = customer_df["customer_phone"].tolist()
-    else:
-        customer_phones = [f"234803{random.randint(1000000, 9999999)}" for _ in range(80)]
 
-    terminals = [f"TERM-{i}" for i in range(7002, 7051)]
-    txn_types = [101, 102, 103, 104]
     statuses = ["SUCCESS", "SUCCESS", "SUCCESS", "FAILED"]
 
     generated_files = []

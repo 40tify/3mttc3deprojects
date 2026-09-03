@@ -9,9 +9,9 @@ SELECT
   a.agent_name,
   a.business_name,
   a.tier_level,
-  f.location_cluster,
-  f.state,
-  f.region,
+  g.location_cluster,
+  g.state,
+  g.region,
   COUNT(f.transaction_id) AS total_transactions,
   SUM(f.transaction_amount) AS total_volume,
   SUM(f.fee_charged) AS total_fees_collected,
@@ -21,34 +21,42 @@ SELECT
 FROM `john_dw_core_dataset.fact_daily_transactions` f
 LEFT JOIN `john_dw_core_dataset.dim_agents` a
   ON f.agent_id = a.agent_id
+LEFT JOIN `john_dw_core_dataset.dim_geography` g
+  ON f.geo_id = g.geo_id
 GROUP BY 1, 2, 3, 4, 5, 6, 7;
 
 -- 2. View: Daily Regional Liquidity Summary
 CREATE OR REPLACE VIEW `john_dw_analytics_dataset.vw_daily_liquidity_summary` AS
 SELECT
   f.transaction_date,
-  f.region,
-  f.state,
-  f.lga,
-  f.location_cluster,
-  SUM(CASE WHEN f.direction = 'IN' THEN f.transaction_amount ELSE 0 END) AS cash_in_volume,
-  SUM(CASE WHEN f.direction = 'OUT' THEN f.transaction_amount ELSE 0 END) AS cash_out_volume,
-  SUM(CASE WHEN f.direction = 'IN' THEN f.transaction_amount ELSE -f.transaction_amount END) AS net_liquidity_flow,
+  g.region,
+  g.state,
+  g.lga,
+  g.location_cluster,
+  SUM(CASE WHEN UPPER(t.direction) = 'IN' THEN f.transaction_amount ELSE 0 END) AS cash_in_volume,
+  SUM(CASE WHEN UPPER(t.direction) = 'OUT' THEN f.transaction_amount ELSE 0 END) AS cash_out_volume,
+  SUM(CASE WHEN UPPER(t.direction) = 'IN' THEN f.transaction_amount ELSE -f.transaction_amount END) AS net_liquidity_flow,
   COUNT(f.transaction_id) AS total_transactions
 FROM `john_dw_core_dataset.fact_daily_transactions` f
+LEFT JOIN `john_dw_core_dataset.dim_geography` g
+  ON f.geo_id = g.geo_id
+LEFT JOIN `john_dw_core_dataset.dim_transaction_types` t
+  ON f.txn_type_id = t.txn_type_id
 GROUP BY 1, 2, 3, 4, 5;
 
 -- 3. View: KYC Compliance Risk Analysis
 CREATE OR REPLACE VIEW `john_dw_analytics_dataset.vw_kyc_compliance_risk` AS
 SELECT
   f.transaction_date,
-  f.customer_phone,
-  f.kyc_status,
+  c.customer_phone,
+  c.kyc_status,
   COUNT(f.transaction_id) AS transaction_count,
   SUM(f.transaction_amount) AS total_amount,
   AVG(f.transaction_amount) AS avg_amount,
   MAX(f.transaction_amount) AS max_single_transaction
 FROM `john_dw_core_dataset.fact_daily_transactions` f
-WHERE UPPER(f.kyc_status) IN ('UNREGISTERED', 'PENDING')
+LEFT JOIN `john_dw_core_dataset.dim_customers` c
+  ON f.customer_id = c.customer_id
+WHERE UPPER(c.kyc_status) IN ('UNREGISTERED', 'PENDING')
 GROUP BY 1, 2, 3
 HAVING SUM(f.transaction_amount) > 50000;

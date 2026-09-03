@@ -98,17 +98,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_transactions` (
   transaction_timestamp TIMESTAMP NOT NULL,
   transaction_date DATE NOT NULL,
   agent_id INT64,
-  agent_name STRING,
-  terminal_id STRING NOT NULL,
-  location_cluster STRING,
-  lga STRING,
-  state STRING,
-  region STRING,
-  customer_phone STRING,
-  kyc_status STRING,
+  geo_id INT64,
+  customer_id INT64,
   txn_type_id INT64,
-  transaction_name STRING,
-  direction STRING,
   transaction_amount NUMERIC NOT NULL,
   fee_charged NUMERIC NOT NULL,
   agent_commission NUMERIC NOT NULL,
@@ -116,8 +108,8 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_transactions` (
   update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 PARTITION BY transaction_date
-CLUSTER BY agent_id, state
-OPTIONS(description="Core transactional fact table partitioned by transaction date and clustered by agent ID and state");
+CLUSTER BY agent_id, geo_id
+OPTIONS(description="Core transactional fact table partitioned by transaction date and clustered by agent ID and geo ID");
 
 -- -----------------------------------------------------------------------------
 -- 5. Create Core Failed Fact Table in john_dw_core_dataset (Partitioned & Clustered)
@@ -128,17 +120,9 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_failed_transactions`
   transaction_timestamp TIMESTAMP NOT NULL,
   transaction_date DATE NOT NULL,
   agent_id INT64,
-  agent_name STRING,
-  terminal_id STRING NOT NULL,
-  location_cluster STRING,
-  lga STRING,
-  state STRING,
-  region STRING,
-  customer_phone STRING,
-  kyc_status STRING,
+  geo_id INT64,
+  customer_id INT64,
   txn_type_id INT64,
-  transaction_name STRING,
-  direction STRING,
   transaction_amount NUMERIC NOT NULL,
   fee_charged NUMERIC NOT NULL,
   transaction_status STRING NOT NULL,
@@ -146,8 +130,8 @@ CREATE TABLE IF NOT EXISTS `john_dw_core_dataset.fact_daily_failed_transactions`
   update_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
 )
 PARTITION BY transaction_date
-CLUSTER BY agent_id, state
-OPTIONS(description="Core transactional failed fact table partitioned by transaction date and clustered by agent ID and state");
+CLUSTER BY agent_id, geo_id
+OPTIONS(description="Core transactional failed fact table partitioned by transaction date and clustered by agent ID and geo ID");
 
 -- -----------------------------------------------------------------------------
 -- 6. Create Pipeline Execution Audit Log Table in john_dw_core_dataset

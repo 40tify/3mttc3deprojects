@@ -111,12 +111,12 @@ All dimension tables include `insert_timestamp` and `update_timestamp` columns (
 - Performs dimension lookups, string parsing, type casting, and conditionally calculates `agent_commission` (70% of transaction fee ONLY for successful transactions; 0 for failed transactions).
 
 ### Successful Fact Table (`john_dw_core_dataset.fact_daily_transactions`)
-- Stores successful financial events. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `state`.
-- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `agent_commission` (NUMERIC), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
+- Stores successful financial events. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `geo_id`.
+- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64, FK), `geo_id` (INT64, FK), `customer_id` (INT64, FK), `txn_type_id` (INT64, FK), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `agent_commission` (NUMERIC), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 
 ### Failed Fact Table (`john_dw_core_dataset.fact_daily_failed_transactions`)
-- Stores failed operational events for debugging and reliability tracking. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `state`.
-- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64), `agent_name` (STRING), `terminal_id` (STRING), `location_cluster` (STRING), `lga` (STRING), `state` (STRING), `region` (STRING), `customer_phone` (STRING), `kyc_status` (STRING), `txn_type_id` (INT64), `transaction_name` (STRING), `direction` (STRING), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `transaction_status` (STRING), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
+- Stores failed operational events for debugging and reliability tracking. Partitioned by `transaction_date` (DATE) and clustered by `agent_id`, `geo_id`.
+- Schema: `transaction_id` (STRING, PK), `transaction_timestamp` (TIMESTAMP), `transaction_date` (DATE), `agent_id` (INT64, FK), `geo_id` (INT64, FK), `customer_id` (INT64, FK), `txn_type_id` (INT64, FK), `transaction_amount` (NUMERIC), `fee_charged` (NUMERIC), `transaction_status` (STRING), `insert_timestamp` (TIMESTAMP), `update_timestamp` (TIMESTAMP)
 
 ### Serving Views (`john_dw_analytics_dataset`)
 1. **`vw_agent_performance`**: Summarizes total transactions, transaction volume, gross fees, and agent commission earnings by agent tier and cluster.
@@ -136,8 +136,9 @@ All DAGs connect to Google Cloud Storage using an Airflow Connection `gcp_hmac_c
 - Executes one-time load into BigQuery `john_dw_core_dataset.dim_*` tables.
 
 ### DAG 1: Daily Landing Data Generator (`@daily`)
-- **Staging Sync (Hidden Dependency Fix)**: Prior to generating daily operational logs, it runs `ensure_dim_customers_local()` to verify if `dim_customers.csv` exists on local container storage. If it is missing (e.g., in a fresh container launch), it downloads it automatically from GCS `temp/dim_customers.csv` using `gcp_hmac_conn` to guarantee referential phone numbers integrity.
-- Simulates daily POS operational logs (injecting 10% bad data for schema validation).
+- **Staging Sync & Dimension Dependency**: Prior to generating daily operational logs, it runs `ensure_dimension_files_local()` to verify that all seed dimension CSVs (`dim_customers.csv`, `dim_agents.csv`, `dim_transaction_types.csv`, `dim_geography.csv`) are present locally (downloading them automatically from GCS `temp/` if needed). If any prerequisite dimension file is missing, DAG 1 raises an error enforcing that DAG 0 (`@once`) has completed first.
+- **Strict Referential Integrity**: Samples customer phone numbers from `dim_customers.csv`, terminal IDs from `dim_agents.csv`, and transaction types from `dim_transaction_types.csv` with zero random fallback phone numbers.
+- Simulates daily POS operational logs (injecting 10% bad data for staging schema validation).
 - Outputs exactly 3 deterministic CSV files per daily logical date: `landing/lnd_YYYYMMDD_1.csv`, `landing/lnd_YYYYMMDD_2.csv`, `landing/lnd_YYYYMMDD_3.csv`.
 - Uploads them to GCS `landing/` using `gcp_hmac_conn`.
 - Guarantees idempotency (re-running overwrites exact 3 files).

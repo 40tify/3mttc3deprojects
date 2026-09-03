@@ -25,8 +25,13 @@ credentials/*
 !credentials/gcp-sa-key.json.template
 
 #Others
-walkthrough.md
+*walkthrough*.md
 *implementation_plan*.md
 
 Project-Guide.pdf
+
+maintenance_clear_history_dag
+/dags/maintenance_clear_history_dag.py
+
+
 

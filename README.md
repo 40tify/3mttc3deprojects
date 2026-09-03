@@ -61,9 +61,9 @@ graph TD
 ### Logical Data Flow Layers
 1. **Landing Layer (`john_lnd_stg_dataset.lnd_daily_transactions`)**: Raw ingestion layer loaded directly from GCS transactional logs (`landing/lnd_YYYYMMDD_1..3.csv`).
 2. **Staging Layer (`john_lnd_stg_dataset.stg_daily_transactions`)**: Cleans, casts types, performs dimension lookups, stages all transaction events (both `SUCCESS` and `FAILED`), and conditionally computes business metrics (e.g. `agent_commission` calculated as 70% of the transaction fee ONLY for successful transactions).
-3. **Core Fact Layer**:
-   * **Successful Fact Table (`john_dw_core_dataset.fact_daily_transactions`)**: Partitioned (by transaction date) and clustered (by agent ID and state) data mart storing successful transaction events. Includes `insert_timestamp` and `update_timestamp` tracking.
-   * **Failed Fact Table (`john_dw_core_dataset.fact_daily_failed_transactions`)**: Partitioned (by transaction date) and clustered (by agent ID and state) data mart storing failed operational events for reliability analysis. Includes `insert_timestamp` and `update_timestamp` tracking.
+3. **Core Fact Layer (Star Schema)**:
+   * **Successful Fact Table (`john_dw_core_dataset.fact_daily_transactions`)**: Partitioned (by transaction date) and clustered (by `agent_id` and `geo_id`) Star Schema fact table storing successful transaction metrics with foreign key relationships (`agent_id`, `geo_id`, `customer_id`, `txn_type_id`) and audit timestamps (`insert_timestamp`, `update_timestamp`).
+   * **Failed Fact Table (`john_dw_core_dataset.fact_daily_failed_transactions`)**: Partitioned (by transaction date) and clustered (by `agent_id` and `geo_id`) Star Schema fact table storing failed transaction metrics, error status, foreign keys, and audit timestamps.
 4. **Serving Views Layer (`john_dw_analytics_dataset.vw_*`)**: Analytical layer hosting semantic views for business reporting.
 
 ---
@@ -92,7 +92,38 @@ graph TD
 
 ---
 
-## 🗄️ Database Schema Summary
+## 🗄️ Database Schema Summary & Star Schema Architecture
+
+### 🌟 Star Schema Architecture Flow
+
+```mermaid
+graph TD
+    subgraph Dimensions ["🏢 Core Dimension Tables"]
+        DIM_G["dim_geography<br><code>geo_id (PK), location_cluster, lga, state, region</code>"]
+        DIM_A["dim_agents<br><code>agent_id (PK), agent_name, business_name, terminal_id, tier_level, geo_id</code>"]
+        DIM_C["dim_customers<br><code>customer_id (PK), customer_phone, kyc_status, account_type</code>"]
+        DIM_T["dim_transaction_types<br><code>txn_type_id (PK), txn_name, direction, is_financial</code>"]
+    end
+
+    subgraph Fact ["📊 Core Fact Table (Star Center)"]
+        FACT["fact_daily_transactions<br><code>transaction_id (PK)<br>transaction_date (PARTITION)<br>agent_id (FK)<br>geo_id (FK)<br>customer_id (FK)<br>txn_type_id (FK)<br>transaction_amount<br>fee_charged<br>agent_commission</code>"]
+    end
+
+    subgraph Views ["📈 Analytical Serving Views"]
+        VW1["vw_agent_performance"]
+        VW2["vw_daily_liquidity_summary"]
+        VW3["vw_kyc_compliance_risk"]
+    end
+
+    DIM_A -->|agent_id| FACT
+    DIM_G -->|geo_id| FACT
+    DIM_C -->|customer_id| FACT
+    DIM_T -->|txn_type_id| FACT
+
+    FACT -->|Join on FKs| VW1
+    FACT -->|Join on FKs| VW2
+    FACT -->|Join on FKs| VW3
+```
 
 ### Dimension Tables (`john_dw_core_dataset`)
 All dimension tables contain `insert_timestamp` and `update_timestamp` columns to track ingestion and modifications.
@@ -102,8 +133,8 @@ All dimension tables contain `insert_timestamp` and `update_timestamp` columns t
 * **`dim_geography`**: Geographical mapping of terminals (regions, states, LGAs).
 
 ### Core Fact & Logs (`john_dw_core_dataset`)
-* **`fact_daily_transactions`**: Partitioned and clustered transaction logs storing successful transaction events, enriched with geographical lookups, derived commissions, and audit timestamps.
-* **`fact_daily_failed_transactions`**: Partitioned and clustered logs storing failed operational transactions for error analysis, enriched with metadata and audit timestamps.
+* **`fact_daily_transactions`**: Partitioned (by date) and clustered (by `agent_id`, `geo_id`) Star Schema fact table storing successful transactions linked via foreign keys (`agent_id`, `geo_id`, `customer_id`, `txn_type_id`) with derived commissions and audit timestamps.
+* **`fact_daily_failed_transactions`**: Partitioned and clustered logs storing failed operational transactions for error analysis, linked to dimension keys and audit timestamps.
 * **`pipeline_execution_logs`**: Logs step-by-step metadata (logical dates, rows processed, runtime status) across the entire pipeline.
 
 ---

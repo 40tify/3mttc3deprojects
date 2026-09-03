@@ -66,7 +66,8 @@ def generate_dimensions():
             "business_name": f"{fake.company()} Ventures",
             "terminal_id": f"TERM-{agent_id + 6000}", # TERM-7001 to TERM-7050
             "tier_level": random.choice(["Bronze", "Silver", "Gold"]),
-            "signup_date": fake.date_between(start_date="-2y", end_date="-1m").strftime("%Y-%m-%d")
+            "signup_date": fake.date_between(start_date="-2y", end_date="-1m").strftime("%Y-%m-%d"),
+            "geo_id": random.randint(1, 15)
         })
     pd.DataFrame(agent_data).to_csv("data/dim_agents.csv", index=False)
 
@@ -96,19 +97,26 @@ def generate_dimensions():
 def generate_daily_landing_file(date_str="20260706"):
     print(f"Generating transaction landing file for {date_str}...")
     
-    # Reload generated terminal IDs and pick customer phones from dim_customers.csv to ensure referential integrity
-    terminals = [f"TERM-{i}" for i in range(7002, 7051)]
-    
     customers_path = "data/dim_customers.csv"
-    if os.path.exists(customers_path):
-        customer_df = pd.read_csv(customers_path)
-        customer_phones = customer_df["customer_phone"].tolist()
-    else:
-        # Fallback if file doesn't exist yet
-        customer_phones = [f"234803{random.randint(1000000, 9999999)}" for _ in range(80)]
-    
-    # 101: Deposit, 102: Withdrawal, 103: Bill Pay, 104: Airtime
-    txn_types = [101, 102, 103, 104] 
+    agents_path = "data/dim_agents.csv"
+    txn_types_path = "data/dim_transaction_types.csv"
+
+    if not os.path.exists(customers_path):
+        raise FileNotFoundError(f"Prerequisite file '{customers_path}' not found. Run generate_dimensions() first.")
+    if not os.path.exists(agents_path):
+        raise FileNotFoundError(f"Prerequisite file '{agents_path}' not found. Run generate_dimensions() first.")
+    if not os.path.exists(txn_types_path):
+        raise FileNotFoundError(f"Prerequisite file '{txn_types_path}' not found. Run generate_dimensions() first.")
+
+    customer_df = pd.read_csv(customers_path)
+    customer_phones = customer_df["customer_phone"].astype(str).tolist()
+
+    agents_df = pd.read_csv(agents_path)
+    terminals = agents_df["terminal_id"].astype(str).tolist()
+
+    txn_types_df = pd.read_csv(txn_types_path)
+    txn_types = txn_types_df["txn_type_id"].astype(int).tolist()
+
     statuses = ["SUCCESS", "SUCCESS", "SUCCESS", "FAILED"] # Heavily skewed toward SUCCESS
 
     txn_rows = []
@@ -138,7 +146,7 @@ def generate_daily_landing_file(date_str="20260706"):
         fee_charged = round(fee_charged, 2)
         
         txn_rows.append({
-            "txid": f"TXN-{random.randint(100000, 999999)}",
+            "txnid": f"TXN-{random.randint(100000, 999999)}",
             "createdat": timestamp,
             "terminalid": random.choice(terminals),
             "custphone": random.choice(customer_phones),
