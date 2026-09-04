@@ -76,18 +76,19 @@ def log_audit_event(client, run_id, logical_date, task_id, target_table, rows_pr
     (run_id, logical_date, task_id, target_table, rows_processed, execution_status, created_at)
     VALUES (@run_id, DATE(@logical_date), @task_id, @target_table, @rows_processed, @status, CURRENT_TIMESTAMP())
     """
+    safe_rows = int(rows_processed) if rows_processed is not None else 0
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("run_id", "STRING", run_id),
             bigquery.ScalarQueryParameter("logical_date", "STRING", logical_date),
             bigquery.ScalarQueryParameter("task_id", "STRING", task_id),
             bigquery.ScalarQueryParameter("target_table", "STRING", target_table),
-            bigquery.ScalarQueryParameter("rows_processed", "INT64", rows_processed),
+            bigquery.ScalarQueryParameter("rows_processed", "INT64", safe_rows),
             bigquery.ScalarQueryParameter("status", "STRING", status),
         ]
     )
     client.query(query, job_config=job_config).result()
-    print(f"Logged audit event: {task_id} -> {status} (rows: {rows_processed})")
+    print(f"Logged audit event: {task_id} -> {status} (rows: {safe_rows})")
 
 def load_landing_to_bigquery(run_id, logical_date, ds_nodash, **kwargs):
     """
@@ -158,11 +159,11 @@ def transform_landing_to_staging(run_id, logical_date, **kwargs):
         print("Simulating transform: Transformed 1350 valid records into staging.")
         return
 
-    sql_path = os.path.join(os.path.dirname(__file__), "../sql/02_elt_transform_landing_to_staging.sql")
+    sql_path = os.path.join(os.path.dirname(__file__), "sql/02_elt_transform_landing_to_staging.sql")
     if not os.path.exists(sql_path):
-        sql_path = os.path.join(os.path.dirname(__file__), "sql/02_elt_transform_landing_to_staging.sql")
+        sql_path = os.path.join(os.path.dirname(__file__), "../sql/02_elt_transform_landing_to_staging.sql")
         if not os.path.exists(sql_path):
-            sql_path = "/opt/airflow/sql/02_elt_transform_landing_to_staging.sql"
+            sql_path = "/opt/airflow/dags/sql/02_elt_transform_landing_to_staging.sql"
 
     try:
         with open(sql_path, "r") as f:
@@ -209,11 +210,11 @@ def merge_staging_to_fact(run_id, logical_date, **kwargs):
         print("Simulating merge: Merged 1350 records into fact tables.")
         return
 
-    sql_path = os.path.join(os.path.dirname(__file__), "../sql/03_elt_merge_staging_to_fact.sql")
+    sql_path = os.path.join(os.path.dirname(__file__), "sql/03_elt_merge_staging_to_fact.sql")
     if not os.path.exists(sql_path):
-        sql_path = os.path.join(os.path.dirname(__file__), "sql/03_elt_merge_staging_to_fact.sql")
+        sql_path = os.path.join(os.path.dirname(__file__), "../sql/03_elt_merge_staging_to_fact.sql")
         if not os.path.exists(sql_path):
-            sql_path = "/opt/airflow/sql/03_elt_merge_staging_to_fact.sql"
+            sql_path = "/opt/airflow/dags/sql/03_elt_merge_staging_to_fact.sql"
 
     try:
         with open(sql_path, "r") as f:
@@ -258,11 +259,11 @@ def refresh_serving_views(run_id, logical_date, **kwargs):
         print("Simulating view refresh: Views refreshed successfully.")
         return
 
-    sql_path = os.path.join(os.path.dirname(__file__), "../sql/04_create_serving_views.sql")
+    sql_path = os.path.join(os.path.dirname(__file__), "sql/04_create_serving_views.sql")
     if not os.path.exists(sql_path):
-        sql_path = os.path.join(os.path.dirname(__file__), "sql/04_create_serving_views.sql")
+        sql_path = os.path.join(os.path.dirname(__file__), "../sql/04_create_serving_views.sql")
         if not os.path.exists(sql_path):
-            sql_path = "/opt/airflow/sql/04_create_serving_views.sql"
+            sql_path = "/opt/airflow/dags/sql/04_create_serving_views.sql"
 
     try:
         with open(sql_path, "r") as f:

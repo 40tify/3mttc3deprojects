@@ -14,12 +14,7 @@ from airflow.models import Variable
 # Initialize Faker with Nigerian context
 fake = Faker(['en_NG'])
 
-LOCAL_DATA_DIR = "/opt/airflow/data"
-if not os.path.exists(LOCAL_DATA_DIR):
-    local_dir_fallback = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
-    if os.path.exists(local_dir_fallback):
-        LOCAL_DATA_DIR = local_dir_fallback
-os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+LOCAL_DATA_DIR = "/opt/airflow/data" if os.path.isdir("/opt/airflow") else os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
 
 def get_gcs_client_and_bucket():
     """
@@ -60,6 +55,7 @@ def ensure_dimension_files_local(s3_client, bucket_name, local_dir):
     Ensures that all prerequisite seed dimension CSV files exist locally in local_dir.
     If any file is missing locally, attempts to download it from gs://.../temp/.
     """
+    os.makedirs(local_dir, exist_ok=True)
     dim_files = [
         "dim_customers.csv",
         "dim_agents.csv",
@@ -103,6 +99,7 @@ def generate_daily_landing_files(ds, ds_nodash, **kwargs):
     and transaction types directly from the seed dimension CSV files produced by DAG 0.
     """
     print(f"DAG 1: Generating 3 deterministic landing files for logical date: {ds}")
+    os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
     
     # 1. Retrieve credentials and bucket name
     s3_client, bucket_name = get_gcs_client_and_bucket()

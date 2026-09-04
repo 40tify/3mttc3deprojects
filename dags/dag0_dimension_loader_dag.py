@@ -14,8 +14,7 @@ from airflow.models import Variable
 # Initialize Faker with Nigerian context
 fake = Faker(['en_NG'])
 
-LOCAL_DATA_DIR = "/opt/airflow/data"
-os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+LOCAL_DATA_DIR = "/opt/airflow/data" if os.path.isdir("/opt/airflow") else os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
 
 def get_gcs_client_and_bucket():
     """
@@ -63,6 +62,7 @@ default_args = {
 def generate_dimensions_csv(**kwargs):
     """Generates all seed dimension CSVs locally in data/ directory."""
     print("Executing DAG 0: Simulating and generating seed dimension data...")
+    os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
     Faker.seed(42)
     random.seed(42)
 

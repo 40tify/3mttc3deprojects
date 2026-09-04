@@ -22,12 +22,12 @@ SELECT
   CURRENT_TIMESTAMP() AS transformed_at
 FROM `john_lnd_stg_dataset.lnd_daily_transactions` l
 LEFT JOIN `john_dw_core_dataset.dim_agents` a 
-  ON l.terminalid = a.terminal_id
+  ON CAST(l.terminalid AS STRING) = CAST(a.terminal_id AS STRING)
 LEFT JOIN `john_dw_core_dataset.dim_customers` c 
-  ON CAST(l.custphone AS STRING) = c.customer_phone
-  OR REGEXP_REPLACE(CAST(l.custphone AS STRING), r'\.0$', '') = c.customer_phone
+  ON CAST(l.custphone AS STRING) = CAST(c.customer_phone AS STRING)
+  OR REGEXP_REPLACE(CAST(l.custphone AS STRING), r'\.0$', '') = CAST(c.customer_phone AS STRING)
 LEFT JOIN `john_dw_core_dataset.dim_transaction_types` t 
-  ON l.txntypecode = t.txn_type_id
+  ON CAST(l.txntypecode AS STRING) = CAST(t.txn_type_id AS STRING)
 WHERE UPPER(l.status) IN ('SUCCESS', 'FAILED')
   AND l.txnid IS NOT NULL
   AND l.createdat IS NOT NULL

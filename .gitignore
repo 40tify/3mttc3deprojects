@@ -30,8 +30,7 @@ credentials/*
 
 Project-Guide.pdf
 
-maintenance_clear_history_dag
-/dags/maintenance_clear_history_dag.py
+
 
 
 
