@@ -1,0 +1,150 @@
+{
+  "lineages": [
+    {
+      "task_id": "gcs_landing_to_lnd_daily_transactions",
+      "source_fqn": "{GCS}.\"3mtt-mentees-bucket.john/landing\"",
+      "target_fqn": "{BQ}.{PROJECT}.john_lnd_stg_dataset.lnd_daily_transactions",
+      "source_type": "container",
+      "target_type": "table",
+      "column_mappings": []
+    },
+    {
+      "task_id": "lnd_to_stg_daily_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_lnd_stg_dataset.lnd_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_lnd_stg_dataset.stg_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "txnid", "target": "transaction_id" },
+        { "source": "createdat", "target": "transaction_timestamp" },
+        { "source": "createdat", "target": "transaction_date" },
+        { "source": "amount", "target": "transaction_amount" },
+        { "source": "fee_charged", "target": "fee_charged" },
+        { "source": "fee_charged", "target": "agent_commission" },
+        { "source": "status", "target": "transaction_status" }
+      ]
+    },
+    {
+      "task_id": "dim_agents_to_fact_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.dim_agents",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "agent_id", "target": "agent_id" }
+      ]
+    },
+    {
+      "task_id": "dim_customers_to_fact_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.dim_customers",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "customer_id", "target": "customer_id" }
+      ]
+    },
+    {
+      "task_id": "dim_transaction_types_to_fact_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.dim_transaction_types",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "transaction_type_id", "target": "transaction_type_id" }
+      ]
+    },
+    {
+      "task_id": "dim_geography_to_fact_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.dim_geography",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "geo_id", "target": "geography_id" }
+      ]
+    },
+    {
+      "task_id": "stg_to_fact_daily_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_lnd_stg_dataset.stg_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "transaction_id", "target": "transaction_id" },
+        { "source": "transaction_timestamp", "target": "transaction_timestamp" },
+        { "source": "transaction_date", "target": "transaction_date" },
+        { "source": "agent_id", "target": "agent_id" },
+        { "source": "geography_id", "target": "geography_id" },
+        { "source": "customer_id", "target": "customer_id" },
+        { "source": "transaction_type_id", "target": "transaction_type_id" },
+        { "source": "transaction_amount", "target": "transaction_amount" },
+        { "source": "fee_charged", "target": "fee_charged" },
+        { "source": "agent_commission", "target": "agent_commission" }
+      ]
+    },
+    {
+      "task_id": "stg_to_fact_failed_transactions",
+      "source_fqn": "{BQ}.{PROJECT}.john_lnd_stg_dataset.stg_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_failed_transactions",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "transaction_id", "target": "transaction_id" },
+        { "source": "transaction_timestamp", "target": "transaction_timestamp" },
+        { "source": "transaction_date", "target": "transaction_date" },
+        { "source": "agent_id", "target": "agent_id" },
+        { "source": "geography_id", "target": "geography_id" },
+        { "source": "customer_id", "target": "customer_id" },
+        { "source": "transaction_type_id", "target": "transaction_type_id" },
+        { "source": "transaction_amount", "target": "transaction_amount" },
+        { "source": "fee_charged", "target": "fee_charged" }
+      ]
+    },
+    {
+      "task_id": "fact_to_vw_agent_performance",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_analytics_dataset.vw_agent_performance",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "agent_id", "target": "agent_id" },
+        { "source": "transaction_amount", "target": "total_volume" },
+        { "source": "fee_charged", "target": "total_revenue" },
+        { "source": "agent_commission", "target": "commission_earned" }
+      ]
+    },
+    {
+      "task_id": "fact_to_vw_daily_liquidity_summary",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_analytics_dataset.vw_daily_liquidity_summary",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "transaction_date", "target": "transaction_date" },
+        { "source": "transaction_amount", "target": "total_inflow" },
+        { "source": "transaction_amount", "target": "total_outflow" },
+        { "source": "transaction_amount", "target": "net_liquidity" }
+      ]
+    },
+    {
+      "task_id": "fact_to_vw_kyc_compliance_risk",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "target_fqn": "{BQ}.{PROJECT}.john_dw_analytics_dataset.vw_kyc_compliance_risk",
+      "source_type": "table",
+      "target_type": "table",
+      "column_mappings": [
+        { "source": "customer_id", "target": "customer_id" },
+        { "source": "transaction_amount", "target": "daily_turnover" }
+      ]
+    },
+    {
+      "task_id": "fact_to_iceberg_archival",
+      "source_fqn": "{BQ}.{PROJECT}.john_dw_core_dataset.fact_daily_transactions",
+      "target_fqn": "{GCS}.\"3mtt-mentees-bucket.john/iceberg/fact_daily_transactions\"",
+      "source_type": "table",
+      "target_type": "container",
+      "column_mappings": []
+    }
+  ]
+}

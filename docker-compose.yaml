@@ -1,5 +1,3 @@
-version: '3.8'
-
 x-airflow-common: &airflow-common
   build: .
   env_file:
@@ -10,19 +8,26 @@ x-airflow-common: &airflow-common
     - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
     - AIRFLOW__CORE__LOAD_EXAMPLES=False
     - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+    - GOOGLE_APPLICATION_CREDENTIALS=/opt/airflow/credentials/john-big-query-cluster.json
   volumes:
     - ./dags:/opt/airflow/dags
-    - ./credentials:/opt/airflow/credentials
+    - ./credentials:/opt/airflow/credentials:ro
     - ./data:/opt/airflow/data
     - ./logs:/opt/airflow/logs
   user: "50000:0"
+  networks:
+    - lakehouse_net
   depends_on:
     postgres:
       condition: service_healthy
 
 services:
+  # =============================================================================
+  # 1. Airflow Orchestration Stack
+  # =============================================================================
   postgres:
     image: postgres:13
+    container_name: airflow-postgres
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
@@ -34,10 +39,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - lakehouse_net
     restart: always
 
   airflow-webserver:
     <<: *airflow-common
+    container_name: airflow-webserver
     command: webserver
     ports:
       - "8080:8080"
@@ -50,11 +58,13 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
+    container_name: airflow-scheduler
     command: scheduler
     restart: always
 
   airflow-init:
     <<: *airflow-common
+    container_name: airflow-init
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,7 +89,90 @@ services:
             --conn-password "$$GCP_HMAC_SECRET_KEY" || true
         # Create Airflow Variable for Bucket Name
         airflow variables set 'gcs_bucket_name' "$$GCP_BUCKET_NAME" || true
+        # Seed OpenMetadata Variables & Connection
+        airflow variables set 'omd_bq_service' 'BigQuery-Agency-Banking' || true
+        airflow variables set 'omd_gcs_service' 'GCS-Agency-Banking' || true
+        airflow variables set 'bq_project_id' 'big-query-cluster' || true
+        airflow connections add 'openmetadata_default' \
+            --conn-type 'http' \
+            --conn-host 'openmetadata-server:8585' \
+            --conn-schema 'http' \
+            --conn-password 'eyJraWQiOiJHYjM4OWEtOWY3Ni1nZGpzLWE5MmotMDI0MmJrOTQzNTYiLCJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJvcGVuLW1ldGFkYXRhLm9yZyIsInN1YiI6ImluZ2VzdGlvbi1ib3QiLCJlbWFpbCI6ImluZ2VzdGlvbi1ib3RAb3Blbm1ldGFkYXRhLm9yZyIsImlzQm90Ijp0cnVlLCJ0b2tlblR5cGUiOiJCT1QiLCJpYXQiOjE3ODg1NDU4NjgsImV4cCI6bnVsbH0.mlPOTJj_wXsvHjyzHwxYDaSaYsR_dTFoL_GwE-rQUxWry8Q7DBZfi1amUqp4vtm4JwmSh3ay5Lg11XF3TTqzlZmD6YB6rn_0TBrihLSfm4hZZQWXM-VYmEb8aYjuCTkmNl2OvXNPJI0gowxgxKMEfZHyrpuwoFP6CIbAQfWXZwTTHKmcViAwlfz1eSpwX4iY5PoDa7vHIYy04TDu4y4KGzakkx7fngyua3G4Kvhh7VOSIiWqbx8HTAxah4xizV91JfOFuZJi5jegmtBzP9c6rGlqMR11F2y-gVYOjyX8OhXe7nYUq29e64r6uhOJ7o6br_abrHtdjvX4zYDG2jwlGA' || true
         echo "Airflow initialization complete!"
+
+  # =============================================================================
+  # 2. OpenMetadata Platform Stack (Port 8585)
+  # =============================================================================
+  openmetadata-mysql:
+    image: mysql:8.0.35
+    container_name: openmetadata-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=openmetadata_root
+      - MYSQL_DATABASE=openmetadata_db
+      - MYSQL_USER=openmetadata_user
+      - MYSQL_PASSWORD=openmetadata_password
+    volumes:
+      - openmetadata-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "openmetadata_user", "-popenmetadata_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - lakehouse_net
+    restart: always
+
+  openmetadata-search:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: openmetadata-search
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - openmetadata-search-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'status.*\\(green\\|yellow\\)'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    networks:
+      - lakehouse_net
+    restart: always
+
+  openmetadata-server:
+    image: docker.getcollate.io/openmetadata/server:1.2.4
+    container_name: openmetadata-server
+    environment:
+      - DB_HOST=openmetadata-mysql
+      - DB_PORT=3306
+      - DB_USER=openmetadata_user
+      - DB_USER_PASSWORD=openmetadata_password
+      - DB_SCHEMANAME=openmetadata_db
+      - SEARCH_TYPE=opensearch
+      - SEARCH_HOST=openmetadata-search
+      - SEARCH_PORT=9200
+      - ELASTICSEARCH_HOST=openmetadata-search
+      - ELASTICSEARCH_PORT=9200
+      - OPENMETADATA_SERVER_HOST=http://openmetadata-server:8585
+    ports:
+      - "8585:8585"
+    depends_on:
+      openmetadata-mysql:
+        condition: service_healthy
+      openmetadata-search:
+        condition: service_healthy
+    networks:
+      - lakehouse_net
+    restart: always
+
+networks:
+  lakehouse_net:
+    driver: bridge
 
 volumes:
   postgres-db-volume:
+  openmetadata-mysql-data:
+  openmetadata-search-data:

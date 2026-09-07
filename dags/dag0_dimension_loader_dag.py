@@ -87,7 +87,9 @@ def generate_dimensions_csv(**kwargs):
         "South-West": ["Lagos", "Oyo", "Ogun"],
         "South-East": ["Enugu", "Anambra", "Abia"]
     }
-    geo_data = []
+    geo_data = [
+        {"geo_id": -1, "location_cluster": "Unknown Cluster", "lga": "Unknown", "state": "Unknown", "region": "Unknown"}
+    ]
     for geo_id in range(1, 16):
         region = random.choice(list(regions.keys()))
         state = random.choice(regions[region])
@@ -106,7 +108,17 @@ def generate_dimensions_csv(**kwargs):
     geo_df.to_csv(geo_path, index=False)
 
     # 2. dim_agents
-    agent_data = []
+    agent_data = [
+        {
+            "agent_id": -1,
+            "agent_name": "Unknown Agent",
+            "business_name": "Unknown Business",
+            "terminal_id": "UNKNOWN",
+            "tier_level": "Unknown",
+            "signup_date": "1970-01-01",
+            "geo_id": -1
+        }
+    ]
     for agent_id in range(1001, 1051):
         agent_data.append({
             "agent_id": agent_id,
@@ -123,6 +135,7 @@ def generate_dimensions_csv(**kwargs):
 
     # 3. dim_transaction_types
     txn_type_data = [
+        {"txn_type_id": -1, "txn_name": "Unknown Transaction Type", "direction": "UNKNOWN", "is_financial": False},
         {"txn_type_id": 101, "txn_name": "Deposit", "direction": "IN", "is_financial": True},
         {"txn_type_id": 102, "txn_name": "Withdrawal", "direction": "OUT", "is_financial": True},
         {"txn_type_id": 103, "txn_name": "Bill Payment", "direction": "OUT", "is_financial": True},
@@ -133,7 +146,15 @@ def generate_dimensions_csv(**kwargs):
     txn_type_df.to_csv(txn_type_path, index=False)
 
     # 4. dim_customers
-    customer_data = []
+    customer_data = [
+        {
+            "customer_id": -1,
+            "customer_phone": "0000000000",
+            "kyc_status": "UNKNOWN",
+            "account_type": "UNKNOWN",
+            "registration_date": "1970-01-01"
+        }
+    ]
     for customer_id in range(2001, 2201):
         customer_data.append({
             "customer_id": customer_id,

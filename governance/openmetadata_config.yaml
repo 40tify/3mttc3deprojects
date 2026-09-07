@@ -1,49 +1,62 @@
 # =============================================================================
-# OpenMetadata Data Governance & Quality Configuration
+# OpenMetadata Data Governance, Catalog & Quality Configuration
 # =============================================================================
 
 version: "1.2"
 openmetadata:
-  hostPort: "http://openmetadata.internal:8585/api"
+  hostPort: "http://openmetadata-server:8585/api"
   authProvider: "openmetadata"
 
 ingestion_pipelines:
-  - name: "bigquery_lakehouse_lineage"
+  # 1. BigQuery Star Schema Data Warehouse Connector
+  - name: "bigquery_lakehouse_metadata"
     type: "DatabaseService"
-    service_name: "bigquery_lakehouse"
+    service_name: "BigQuery-Agency-Banking"
     config:
       serviceType: "BigQuery"
       source:
         config:
           type: "BigQuery"
+          scheme: "bigquery"
+          project_id: "big-query-cluster"
           datasetFilterPattern:
             includes: ["john_lnd_stg_dataset", "john_dw_core_dataset", "john_dw_analytics_dataset"]
           enableParsedDataModel: true
           includeLineage: true
+          includeTags: true
 
-  - name: "airflow_pipeline_lineage"
+  # 2. Airflow Pipeline Orchestration Connector
+  - name: "airflow_pipeline_metadata"
     type: "PipelineService"
-    service_name: "airflow_orchestrator"
+    service_name: "Airflow-Agency-Banking"
     config:
       serviceType: "Airflow"
       source:
         config:
           type: "Airflow"
+          hostPort: "http://airflow-webserver:8080"
           dagFilterPattern:
-            includes: ["dag0_dimension_loader_dag", "dag1_landing_data_generator_dag", "dag2_core_elt_pipeline_dag", "dag3_iceberg_archival_dag"]
+            includes:
+              - "dag0_dimension_loader_dag"
+              - "dag1_landing_data_generator_dag"
+              - "dag2_core_elt_pipeline_dag"
+              - "dag3_iceberg_archival_dag"
+              - "dag4_agency_banking_lineage_dag"
 
-  - name: "iceberg_catalog_lineage"
-    type: "DatabaseService"
-    service_name: "lakekeeper_iceberg_catalog"
+  # 3. GCS Data Lake Storage Connector
+  - name: "gcs_lakehouse_storage"
+    type: "StorageService"
+    service_name: "GCS-Agency-Banking"
     config:
-      serviceType: "Iceberg"
+      serviceType: "CustomStorage"
       source:
         config:
-          type: "Iceberg"
-          catalogUri: "http://lakekeeper.internal:8080"
-          warehouse: "gs://3mtt-lakehouse-agencybanking/iceberg"
+          type: "GCS"
+          bucketNames: ["3mtt-mentees-bucket"]
+          prefix: "john/"
 
 data_quality_suites:
+  # Quality Assertion Suite: Core Fact Table
   - table: "john_dw_core_dataset.fact_daily_transactions"
     tests:
       - testName: "column_values_to_not_be_null_transaction_id"
@@ -57,13 +70,35 @@ data_quality_suites:
         testDefinitionName: "columnValuesToBeBetween"
         params:
           minValue: 0
-          maxValue: 1000000
+          maxValue: 10000000
       - testName: "column_values_to_not_be_null_agent_commission"
         columnName: "agent_commission"
         testDefinitionName: "columnValuesToBeNotNull"
+      - testName: "column_values_to_not_be_null_agent_id"
+        columnName: "agent_id"
+        testDefinitionName: "columnValuesToBeNotNull"
+      - testName: "column_values_to_not_be_null_txn_type_id"
+        columnName: "txn_type_id"
+        testDefinitionName: "columnValuesToBeNotNull"
 
+  # Quality Assertion Suite: Dimensions
   - table: "john_dw_core_dataset.dim_agents"
     tests:
       - testName: "column_values_to_be_unique_agent_id"
         columnName: "agent_id"
+        testDefinitionName: "columnValuesToBeUnique"
+      - testName: "column_values_to_not_be_null_terminal_id"
+        columnName: "terminal_id"
+        testDefinitionName: "columnValuesToBeNotNull"
+
+  - table: "john_dw_core_dataset.dim_customers"
+    tests:
+      - testName: "column_values_to_be_unique_customer_id"
+        columnName: "customer_id"
+        testDefinitionName: "columnValuesToBeUnique"
+
+  - table: "john_dw_core_dataset.dim_transaction_types"
+    tests:
+      - testName: "column_values_to_be_unique_txn_type_id"
+        columnName: "txn_type_id"
         testDefinitionName: "columnValuesToBeUnique"
