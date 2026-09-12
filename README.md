@@ -166,6 +166,23 @@ graph LR
 
 ---
 
+## 🗄️ Project Pipeline & Orchestration
+
+### ⚡ Airflow Orchestration DAGs
+* **DAG 0: One-Time Dimension Loader** ➔ [`dags/dag0_dimension_loader_dag.py`](./dags/dag0_dimension_loader_dag.py) — Ingests initial static dimension CSVs (`dim_agents`, `dim_customers`, `dim_geography`, `dim_transaction_types`) into BigQuery core dataset.
+* **DAG 1: Daily Landing Data Generator** ➔ [`dags/agency_banking_data_generator_dag.py`](./dags/agency_banking_data_generator_dag.py) — Simulates POS terminal batches and uploads daily transaction logs (`lnd_YYYYMMDD_1..3.csv`) to GCS landing storage.
+* **DAG 2: Core ELT & Star Schema Pipeline** ➔ [`dags/agency_banking_elt_dag.py`](./dags/agency_banking_elt_dag.py) — Executes raw ingestion, dimension lookup staging, Star Schema MERGE upserts (`fact_daily_transactions` & `fact_daily_failed_transactions`), and refreshes analytical serving views.
+* **DAG 3: Cold Storage / Iceberg Archival Pipeline** ➔ [`dags/agency_banking_iceberg_archival_dag.py`](./dags/agency_banking_iceberg_archival_dag.py) — Exports aged fact partitions to GCS Iceberg/Parquet storage for long-term audit retention.
+* **DAG 4: OpenMetadata Automated Lineage Pipeline** ➔ [`dags/dag4_agency_banking_lineage_dag.py`](./dags/dag4_agency_banking_lineage_dag.py) — Programmatically emits all 12 end-to-end table-level and column-level lineage edges into the OpenMetadata governance platform.
+
+### 📊 SQL Database Scripts (BigQuery DDL & ELT Queries)
+* **Dataset & Table DDL Setup**: [`sql/01_create_datasets_and_tables.sql`](./sql/01_create_datasets_and_tables.sql) — Initializes schemas, partitioned & clustered tables, and foreign key relationships.
+* **Landing-to-Staging Transform**: [`sql/02_elt_transform_landing_to_staging.sql`](./sql/02_elt_transform_landing_to_staging.sql) — Cleanses raw logs, casts types, and looks up dimension surrogate keys.
+* **Staging-to-Fact MERGE Upsert**: [`sql/03_elt_merge_staging_to_fact.sql`](./sql/03_elt_merge_staging_to_fact.sql) — Idempotently merges transaction batches into successful and failed fact tables.
+* **BI Serving Views Setup**: [`sql/04_create_serving_views.sql`](./sql/04_create_serving_views.sql) — Deploys semantic analytical data marts (`vw_agent_performance`, `vw_daily_liquidity_summary`, `vw_kyc_compliance_risk`).
+
+---
+
 ## 🗂️ Tracked Repository Structure
 
 ```text
